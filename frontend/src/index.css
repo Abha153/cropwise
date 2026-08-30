@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background-color: #F7F3EA;
+  font-family: 'Inter', sans-serif;
+  color: #12261F;
+  overflow-x: hidden; /* safety net: no component should ever cause page-level horizontal scroll */
+  width: 100%;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+* {
+  min-width: 0; /* prevents flex/grid children (esp. text) from forcing overflow */
+}
+
+/* Accessibility: visible focus ring for keyboard navigation on interactive
+   elements, without adding a ring on mouse click (focus-visible only). */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #F2A93B;
+  outline-offset: 2px;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.font-mono-data {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #C9BDA0; border-radius: 4px; }
+
+.ticker-track {
+  animation: ticker-scroll 28s linear infinite;
+}
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}

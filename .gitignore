@@ -1,0 +1,45 @@
+# --- Secrets -----------------------------------------------------------
+.env
+*.env
+!.env.example
+!*.env.example
+
+# --- Python / backend ---------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Database / local data ------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+backend/cropwise.db
+
+# --- Node / frontend ------------------------------------------------------
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# --- Logs -------------------------------------------------------------
+*.log
+npm-debug.log*
+
+# --- Editor / OS ---------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Misc ------------------------------------------------------------
+*.zip
