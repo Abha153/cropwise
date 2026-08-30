@@ -23,7 +23,14 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
     database_url: str = "sqlite:///./cropwise.db"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://cropwise-gske9dmd3-abha153s-projects.vercel.app/"
+    cors_origins: str = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "https://cropwise-alpha.vercel.app,"
+    "https://cropwise-git-main-abha153s-projects.vercel.app,"
+    "https://cropwise-gske9dmd3-abha153s-projects.vercel.app,"
+    "https://cropwise-aqrt10n2q-abha153s-projects.vercel.app"
+)
 
     # Admin console credentials. In production, ALWAYS set these via
     # environment variables -- never rely on the defaults below.
