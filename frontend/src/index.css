@@ -1,0 +1,215 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --app-bg: #f4f7f4;
+  --card-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-muted: #edf6f0;
+  --input-bg: #ffffff;
+  --text-primary: #17372d;
+  --text-secondary: rgba(23, 55, 45, 0.62);
+  --text-muted: rgba(23, 55, 45, 0.42);
+  --panel-border: rgba(18, 38, 31, 0.08);
+  --control-border: rgba(18, 38, 31, 0.12);
+  --theme-shadow: 0 10px 30px rgba(16, 62, 50, 0.08);
+  --forest: #103E32;
+  --forest-soft: #e8f1ed;
+  --forest-deep: #0d2d27;
+  --gold: #e5b96a;
+  --text: #17372D;
+  --sidebar-bg: #0d352e;
+  --sidebar-text: #f4fbf7;
+}
+
+.dark {
+  color-scheme: dark;
+  --app-bg: #0b1714;
+  --card-bg: #12251f;
+  --surface: #12251f;
+  --surface-elevated: #17352b;
+  --surface-muted: #1b3028;
+  --input-bg: #10221c;
+  --text-primary: #edf7f1;
+  --text-secondary: rgba(237, 247, 241, 0.72);
+  --text-muted: rgba(237, 247, 241, 0.48);
+  --panel-border: rgba(215, 240, 225, 0.12);
+  --control-border: rgba(215, 240, 225, 0.2);
+  --theme-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+  --forest: #174f3f;
+  --forest-soft: #1b3b30;
+  --forest-deep: #09231d;
+  --sidebar-bg: #071f19;
+  --sidebar-text: #edf7f1;
+}
+
+html, body {
+  background-color: var(--app-bg);
+  font-family: 'Inter', sans-serif;
+  color: var(--text-primary);
+  overflow-x: hidden;
+  width: 100%;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+body {
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  background: var(--app-bg);
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+* {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #E5B96A;
+  outline-offset: 2px;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.font-mono-data {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(16, 62, 50, 0.25); border-radius: 999px; }
+
+.ticker-track {
+  animation: ticker-scroll 28s linear infinite;
+}
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.dashboard-shell {
+  background: var(--app-bg);
+}
+
+.dashboard-card {
+  background: var(--card-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--theme-shadow);
+}
+
+.metric-pill {
+  border: 1px solid rgba(16, 62, 50, 0.08);
+  background: rgba(16, 62, 50, 0.04);
+}
+
+.soft-green {
+  background: linear-gradient(180deg, rgba(16, 62, 50, 0.95), rgba(16, 62, 50, 0.88));
+}
+
+.farm-pattern {
+  background-image: linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* Shared theme bridge for existing Tailwind surfaces. This keeps the
+   existing page APIs and class names intact while making the root theme
+   tokens authoritative across older screens that predate dark mode. */
+.dark .dashboard-shell,
+.dark main,
+.dark .min-h-screen {
+  background-color: var(--app-bg) !important;
+  color: var(--text-primary);
+}
+
+.dark .bg-white,
+.dark .bg-paper,
+.dark [class~="bg-white/95"] {
+  background-color: var(--surface) !important;
+}
+
+.dark [class~="bg-white/5"],
+.dark [class~="bg-white/10"],
+.dark [class~="bg-white/15"] {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.dark .bg-wheat,
+.dark [class*="bg-wheat/"] {
+  background-color: var(--surface-muted) !important;
+}
+
+.dark [class*="border-black/"],
+.dark [class*="border-forest/"] {
+  border-color: var(--panel-border) !important;
+}
+
+.dark .text-ink,
+.dark [class~="text-ink/70"],
+.dark [class~="text-ink/60"] {
+  color: var(--text-primary) !important;
+}
+
+.dark [class~="text-ink/50"],
+.dark [class~="text-ink/40"],
+.dark [class~="text-ink/35"] {
+  color: var(--text-muted) !important;
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  color: var(--text-primary) !important;
+  background-color: var(--input-bg) !important;
+  border-color: var(--control-border) !important;
+}
+
+.dark select option {
+  color: var(--text-primary);
+  background-color: var(--surface-elevated);
+}
+
+.dark aside {
+  background-color: var(--sidebar-bg) !important;
+  color: var(--sidebar-text);
+}
+
+.dark header {
+  background-color: rgba(11, 23, 20, 0.9) !important;
+  border-color: var(--panel-border) !important;
+}
+
+.dark .shadow-card,
+.dark .shadow-soft {
+  box-shadow: var(--theme-shadow) !important;
+}
+
+.dark .recharts-cartesian-grid line {
+  stroke: rgba(237, 247, 241, 0.14) !important;
+}
+
+.dark .recharts-text {
+  fill: rgba(237, 247, 241, 0.68) !important;
+}
+
+.dark .recharts-default-tooltip {
+  background-color: var(--surface-elevated) !important;
+  border-color: var(--control-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.dark .bg-marigold.text-ink,
+.dark .bg-amber-400.text-ink {
+  color: #17372d !important;
+}
