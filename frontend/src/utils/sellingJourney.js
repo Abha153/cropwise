@@ -1,4 +1,4 @@
-// The Selling Journey: derives a farmer's current stage from real, persisted
+﻿// The Selling Journey: derives a farmer's current stage from real, persisted
 // application state (Lots + Transactions) -- never from UI interaction (page
 // views, clicks, rendered components). See FarmerDashboard.jsx inspection
 // notes for the exact state mapping this implements.
@@ -9,7 +9,6 @@
 //   03 FIND_BUYER       -- an accepted offer has become a real Transaction
 //   04 CREATE_SHIP      -- transaction has progressed through logistics
 //   05 PAYMENT_RECEIVED -- transaction has reached a paid/completed state
-<<<<<<< HEAD
 //
 // `label` values below are translation KEYS, not display text -- this file
 // is a plain module (not a component), so it can't call the t() hook
@@ -22,15 +21,6 @@ export const STAGES = [
   { key: 'FIND_BUYER', order: 3, label: 'sellingJourney.stage.findBuyer' },
   { key: 'CREATE_SHIP', order: 4, label: 'sellingJourney.stage.createShip' },
   { key: 'PAYMENT_RECEIVED', order: 5, label: 'sellingJourney.stage.paymentReceived' },
-=======
-
-export const STAGES = [
-  { key: 'ADD_PRODUCE', order: 1, label: '01 Add Produce' },
-  { key: 'MARKET_ANALYSIS', order: 2, label: '02 Market Analysis' },
-  { key: 'FIND_BUYER', order: 3, label: '03 Find Buyer' },
-  { key: 'CREATE_SHIP', order: 4, label: '04 Create & Ship' },
-  { key: 'PAYMENT_RECEIVED', order: 5, label: '05 Payment Received' },
->>>>>>> f6748de1cc9f27c1a6fa443e07a9e3a51d7028d6
 ]
 
 const TXN_TERMINAL_PAID = ['PAYMENT_RECEIVED', 'COMPLETED']
@@ -143,7 +133,6 @@ export function selectFocusJourney(lots, transactions) {
   return derived[0]
 }
 
-<<<<<<< HEAD
 // Like STAGES above, `title`/`description`/`ctaLabel` here are translation
 // KEYS (not display text) for the same reason -- this is a plain module,
 // not a component. SellingJourney.jsx resolves each via t(). See
@@ -177,37 +166,6 @@ export const NEXT_DESTINATION = {
     title: 'sellingJourney.destination.paymentReceived.title',
     description: 'sellingJourney.destination.paymentReceived.description',
     ctaLabel: 'sellingJourney.destination.paymentReceived.cta',
-=======
-export const NEXT_DESTINATION = {
-  ADD_PRODUCE: {
-    title: 'Create a lot for your produce',
-    description: 'Add a crop lot so CropWise can start comparing markets for you.',
-    ctaLabel: 'Add Produce',
-    ctaTo: '/lots',
-  },
-  MARKET_ANALYSIS: {
-    title: 'Compare nearby markets',
-    description: "We're comparing nearby markets using price, distance and estimated transport to find your best net return.",
-    ctaLabel: 'View Best Selling Option',
-    ctaTo: '/best-option',
-  },
-  FIND_BUYER: {
-    title: 'Find a verified buyer',
-    description: 'Review buyer demands or offers on your lot and accept the one that works for you.',
-    ctaLabel: 'View Buyer Demands',
-    ctaTo: '/buyer-demands',
-  },
-  CREATE_SHIP: {
-    title: 'Arrange logistics',
-    description: 'Confirm the order and arrange transport so your produce reaches the buyer.',
-    ctaLabel: 'Track Transaction',
-    ctaTo: null, // filled in with /transactions/:id by the caller, which knows the transaction id
-  },
-  PAYMENT_RECEIVED: {
-    title: 'Confirm payment',
-    description: 'Track and confirm payment once the buyer completes it.',
-    ctaLabel: 'View Payment Status',
->>>>>>> f6748de1cc9f27c1a6fa443e07a9e3a51d7028d6
     ctaTo: null,
   },
 }
