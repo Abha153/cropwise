@@ -5,7 +5,15 @@ from app.config import settings
 
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 
-engine = create_engine(settings.database_url, connect_args=connect_args)
+# pool_pre_ping guards against stale connections from a hosted Postgres
+# provider (e.g. Supabase) closing idle connections -- SQLAlchemy will
+# transparently reconnect instead of raising on the next query. It's a
+# no-op for SQLite (single file, no connection pool to go stale).
+engine = create_engine(
+    settings.database_url,
+    connect_args=connect_args,
+    pool_pre_ping=not settings.database_url.startswith("sqlite"),
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
