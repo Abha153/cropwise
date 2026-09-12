@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 // The Selling Journey: derives a farmer's current stage from real, persisted
+=======
+﻿// The Selling Journey: derives a farmer's current stage from real, persisted
+>>>>>>> 1809569d0a1e81db7352c157d14f19b45877f73c
 // application state (Lots + Transactions) -- never from UI interaction (page
 // views, clicks, rendered components). See FarmerDashboard.jsx inspection
 // notes for the exact state mapping this implements.
