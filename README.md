@@ -2,587 +2,812 @@
 
 **Smart Markets. Better Prices. Stronger Farmers.**
 
-CropWise is a complete, working market-linkage and price-discovery platform
-for farmers, built for the *"Strengthening Market Linkages and Price
-Discovery for Farmers"* hackathon track. Its recommendation and assistant
-logic is an explainable, rules-based engine over real government price and
-cost data -- not a general-purpose LLM -- so every recommendation comes
-with a plain-language "why" rather than a black-box answer.
+CropWise is a market-linkage and price-discovery platform designed to help farmers make better selling decisions by connecting **market prices, selling opportunities, buyers, transportation, and profit analysis** in one platform.
 
-It is deliberately **not** a mandi-price display app. It answers the
-question a farmer actually has:
+Built for the **“Strengthening Market Linkages and Price Discovery for Farmers”** problem statement, CropWise goes beyond simply displaying mandi prices. It addresses the practical questions farmers face:
 
-> *What should I sell? Where should I sell it? When should I sell it?
-> To whom? And how much will I actually make after costs?*
+> **What should I sell? Where should I sell it? When should I sell it? To whom? And how much will I actually earn after costs?**
 
 ---
 
-## Changelog (this pass)
+## 🚀 MVP Overview
 
-- 🕵️ **Login activity tracking**: every `POST /auth/login` attempt
-  (success or failure) is now recorded to a new `login_events` table --
-  see "User Activity (login tracking)" below for exactly what is/isn't
-  stored, and the new `GET /admin/user-activity`, `GET
-  /admin/recent-activity`, and `GET /admin/users` endpoints. Existing
-  login behavior and the `/auth/login` response shape are unchanged;
-  `Farmer`/`Buyer` gained a `last_login` column, and existing rows/accounts
-  are unaffected (new column defaults to `NULL`, meaning "not seen yet").
-  Covered by `backend/tests/test_login_tracking.py` (unique-user counting,
-  failed-login identity handling, admin-only access) in addition to the
-  existing suite -- 18/18 tests passing.
-- ⚠️ **Render deployment safety note added**: see "Deploying updates to
-  Render without losing existing data" below -- SQLite on Render's default
-  ephemeral disk does not survive redeploys unless a Render Disk is
-  attached. This is a pre-existing property of the stack, not something
-  introduced by this change, but it's directly relevant to safely shipping
-  this update to a live deployment with real users.
-- 🔐 **Admin credential hardening**: removed the demo admin password from
-  this README, from `backend/.env.example` (now a commented-out template
-  instead of a real committed value), and from the admin login page's
-  frontend source (it used to print the demo password directly under the
-  sign-in form). Admin auth was already, and remains, verified
-  server-side only (`ADMIN_USERNAME`/`ADMIN_PASSWORD` env vars, checked in
-  `app/routers/auth.py::admin_login`) -- the frontend only ever forwards a
-  typed username/password to that endpoint.
-- 🔒 **Security**: rotated the exposed `DATA_GOV_IN_API_KEY`, added a
-  project `.gitignore` (there wasn't one -- `.env` could have been
-  committed), confirmed the key exists only server-side (never in the
-  frontend bundle, logs, or this README).
-- 🗺️ **Mandi discovery/mapping layer** (`app/services/mandi_directory.py`)
-  replaces exact-string market-name matching -- see the live-data section
-  below.
-- 🧭 **Second live resource added** (variety-wise/district data), merged
-  with the first -- prefers whichever has data.
-- 📉 **Historical honesty**: real accumulated live snapshots now persist
-  over time; `/market/prices` and `/forecast` only show genuine data by
-  default, with an explicit `include_demo` opt-in for the old synthetic
-  series instead of presenting it as real.
-- 🎯 **Decision engine**: `/market/compare` now returns a plain-language
-  `why` explanation and an explicit `insufficient_data` message instead of
-  a bare error when nothing can be recommended.
-- 🌗 **Dark/light theme**: a real `ThemeContext` + toggle now exists
-  (persisted, respects OS preference) covering the app shell (sidebar,
-  header, main background/text). Individual page cards still use light
-  surface colors -- full per-page dark styling wasn't exhaustively applied
-  in this pass.
-- ⚠️ Not verified in this pass (no network in the build sandbox): a real
-  successful call to either data.gov.in resource, `npm run build`, and the
-  Python test suite (no tests currently exist in this repo -- see
-  "Known limitations"). All touched Python files do pass `python -m
-  py_compile`.
+CropWise is designed as a full-stack agricultural marketplace and decision-support platform.
+
+The MVP combines:
+
+- Market price comparison
+- Net-profit calculation
+- Farmer-buyer marketplace
+- Smart buyer matching
+- FarmPool shared transportation
+- Group selling
+- Price forecasting
+- Explainable selling recommendations
+- Multilingual interaction
+- Alerts and notifications
+- Admin impact monitoring
+- Persistent cloud database using **PostgreSQL on Supabase**
 
 ---
 
-## What's inside
+# ✨ Core Features
 
-| Area | Feature |
-|---|---|
-| 🌐 **Multilingual UI/text support with reliable voice interaction in English and Hindi** | 15 Indian languages supported for UI text and the text-based assistant; voice input/output is verified reliable for English and Hindi only, with an honest per-language capability matrix rather than a blanket claim |
-| 📊 **Market Intelligence** | Live-style price comparison across nearby markets with a full net-profit breakdown (price − transport − mandi charges − handling), not just the sticker price |
-| 🤖 **AgriAdvisor** | An explainable AI selling recommendation -- sell-now vs. hold %, with every contributing factor (demand, supply, weather, transport, price trend) shown, never a black box |
-| 📈 **Price Forecast** | 7-day price forecast built from a transparent trend + volatility model, with a visible confidence score and chart |
-| 🌾 **AgriMarket** | Farmers post harvest listings; verified buyers browse and submit competing offers (reverse-auction style bidding), with server-side validation (quantity/price/minimum-price/state checks) |
-| ⭐ **Smart Buyer Matching** | Buyers ranked for a listing by estimated net profit, reliability, payment history, distance, and crop interest -- with reasons shown |
-| 🚚 **FarmPool** | Shared-transport calculator: pools your shipment with nearby farmers heading to the same market and shows the savings |
-| 🧮 **Profit Calculator** | Side-by-side comparison of multiple selling scenarios (local mandi vs. direct buyer vs. distant market, etc.) |
-| 🤝 **Group Selling** | FPO/cooperative pooling with per-farmer membership tracking (re-joining updates your quantity instead of double-counting it) |
-| 🔔 **Alerts** | Price-drop, high-demand, opportunity, and harvest-reminder notifications |
-| 🌐🎤 **Multilingual Farm Assistant** | A text-based assistant with a language-neutral intent/entity engine, usable in any of 15 supported UI languages -- reliable voice input/output is available in English and Hindi; never silently guesses crop or location |
-| 📷 **AI-Ready Quality Assessment** | A deterministic quality-grading service that validates the end-to-end marketplace workflow; the service boundary is designed so a trained vision model can replace it without changing marketplace APIs (explicitly not claimed as a live CV model) |
-| 📈 **Impact Dashboard** | Admin-authenticated, live-computed platform impact: farmers/buyers connected, transactions, transport savings, estimated additional farmer income |
-| 🕵️ **User Activity (login tracking)** | Admin-authenticated: registered accounts vs. unique users who've actually logged in (today/this week), successful/failed login event counts, and a recent-activity feed -- see below |
+| FeatureDescription           |                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| 🌐 **Multilingual Platform** | UI and assistant support for multiple Indian languages                   |
+| 📊 **Market Intelligence**   | Compare market prices and calculate expected net realization after costs |
+| 🤖 **AgriAdvisor**           | Explainable sell-now vs. hold recommendations                            |
+| 📈 **Price Forecast**        | Short-term price trend and confidence analysis                           |
+| 🌾 **AgriMarket**            | Farmers create listings and verified buyers submit offers                |
+| ⭐ **Smart Buyer Matching**   | Buyers ranked using price, distance, reliability and crop interest       |
+| 🚚 **FarmPool**              | Shared transportation to reduce logistics cost                           |
+| 🧮 **Profit Calculator**     | Compare different selling scenarios                                      |
+| 🤝 **Group Selling**         | Pool produce through FPO/cooperative-style groups                        |
+| 🔔 **Alerts**                | Price, demand and harvest-related notifications                          |
+| 🌐🎤 **Farm Assistant**      | Multilingual text assistant with browser voice support                   |
+| 📷 **Quality Assessment**    | AI-ready quality grading architecture                                    |
+| 📈 **Impact Dashboard**      | Monitor farmers, buyers, transactions and estimated impact               |
+| 🕵️ **User Activity**        | Track login activity through an admin-protected dashboard                |
 
-Everything runs on **realistic seeded demo data** (10 real Chhattisgarh
-markets, 10 crops, 60 days of synthesized historical mandi prices, demo
-farmer/buyer accounts) so the full flow works immediately with **zero
-external API keys and zero internet dependency**.
+The feature set is based on the existing CropWise MVP documented in the previous implementation.
 
 ---
 
-## 🌐 Multilingual architecture
+# 🏗️ System Architecture
 
-CropWise's language system follows one rule throughout: **language is a
-presentation-layer concern, never a business-logic fork.** There is exactly
-one recommendation engine, one market-comparison algorithm, one offer
-validator -- regardless of which of the 38 listed languages a user picks.
-
+```text
+                         ┌─────────────────────┐
+                         │       FARMER        │
+                         │       / BUYER       │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │   React + Vite      │
+                         │ Tailwind + Recharts │
+                         │      Vercel         │
+                         └──────────┬──────────┘
+                                    │
+                              HTTPS / REST
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │     FastAPI         │
+                         │     Backend         │
+                         │      Render         │
+                         └──────────┬──────────┘
+                                    │
+                              SQLAlchemy ORM
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │ PostgreSQL Database │
+                         │      Supabase       │
+                         └─────────────────────┘
+                                    │
+             ┌──────────────────────┼──────────────────────┐
+             ▼                      ▼                      ▼
+         Farmers                 Buyers                Listings
+         Offers             Market Prices           Transactions
+         FarmPool           Price History           Login Events
+         Groups              Notifications           User Data
 ```
- speech / typed text (any supported language)
+
+---
+
+# 🗄️ Database Architecture
+
+The new CropWise MVP uses **PostgreSQL hosted on Supabase** as the persistent application database.
+
+### Main database entities
+
+```text
+farmers
+buyers
+listings
+offers
+market_prices
+price_history
+groups
+group_members
+farmpools
+notifications
+login_events
+transactions
+```
+
+The database layer uses **SQLAlchemy ORM**, allowing the FastAPI backend to communicate with PostgreSQL through a structured model layer.
+
+### Why PostgreSQL + Supabase?
+
+- Persistent cloud storage
+- Production-oriented relational database
+- Reliable multi-user access
+- Better suited to deployed applications than a local database file
+- Easy integration with Render through environment variables
+- Centralized data for farmers, buyers, listings and transactions
+
+---
+
+# 🧩 Tech Stack
+
+### Frontend
+
+- React 18
+- Vite
+- Tailwind CSS
+- Recharts
+
+### Backend
+
+- Python
+- FastAPI
+- SQLAlchemy
+- Pydantic
+
+### Database
+
+- **PostgreSQL**
+- **Supabase**
+
+### Authentication
+
+- JWT
+- bcrypt password hashing
+- Role-based authentication for Farmer, Buyer and Admin
+
+### Deployment
+
+```text
+Frontend → Vercel
+Backend  → Render
+Database → Supabase PostgreSQL
+```
+
+The original implementation already uses React/Vite/Tailwind on the frontend and FastAPI/SQLAlchemy on the backend; the database layer is the part being moved from SQLite to PostgreSQL.
+
+---
+
+# 🌐 Multilingual Architecture
+
+CropWise follows a **language-neutral business-logic architecture**.
+
+```text
+User Input
+   │
+   ▼
+Language / Intent Detection
+   │
+   ▼
+Crop + Quantity + Location Extraction
+   │
+   ▼
+CropWise Business Logic
+   │
+   ├── Market Comparison
+   ├── Recommendation Engine
+   ├── Buyer Matching
+   └── Profit Calculation
+   │
+   ▼
+Localized Response
+```
+
+Language is treated as a **presentation and interaction layer**, so the core market and recommendation logic remains independent of the selected language.
+
+The current architecture includes language-specific dictionaries, intent handling, response templates and frontend translation files.
+
+---
+
+# 📊 Market Intelligence
+
+CropWise compares selling opportunities based on more than the displayed mandi price.
+
+The platform considers:
+
+```text
+Expected Revenue
+       -
+Transportation Cost
+       -
+Mandi Charges
+       -
+Handling Cost
+       =
+Expected Net Realisation
+```
+
+This allows farmers to compare markets based on **actual expected earnings**, rather than simply choosing the market showing the highest quoted price.
+
+The existing MVP already follows this net-profit approach.
+
+---
+
+# 🤖 Explainable AgriAdvisor
+
+CropWise provides an explainable recommendation rather than presenting an unexplained prediction.
+
+Example:
+
+```text
+Recommendation: SELL NOW
+
+Why?
+
+✓ Market price is increasing
+✓ Demand is high
+✓ Transport cost is manageable
+✓ Supply pressure is moderate
+✓ Current market provides higher expected net realisation
+```
+
+The recommendation engine evaluates factors such as:
+
+- Demand
+- Supply
+- Price trend
+- Transport cost
+- Weather risk
+
+The existing MVP is explicitly designed as an explainable rules-based engine rather than a black-box LLM.
+
+---
+
+# 📈 Price Forecast
+
+CropWise provides short-term price forecasting with a visible confidence indicator.
+
+```text
+Historical Market Data
+         │
+         ▼
+Trend Analysis
+         │
+         ▼
+Volatility Analysis
+         │
+         ▼
+7-Day Forecast
+         │
+         ▼
+Confidence Score
+```
+
+The architecture is designed so the forecasting component can later be replaced with a trained ML model without redesigning the application APIs.
+
+---
+
+# 🌾 AgriMarket
+
+Farmers can:
+
+1. Create a harvest listing
+2. Specify crop and quantity
+3. Define an acceptable price
+4. Add listing details
+5. Receive buyer offers
+6. Compare offers
+7. Accept the most suitable offer
+
+Buyers can:
+
+1. Browse available produce
+2. View listing information
+3. Submit offers
+4. Compete for farmer listings
+
+Server-side validation protects the marketplace workflow.
+
+---
+
+# ⭐ Smart Buyer Matching
+
+CropWise ranks buyers based on multiple factors:
+
+```text
+Buyer Match Score
         │
-        ▼
- app/i18n/nlu.py           <- language-neutral intent + entity extraction
-        │                      (crop, quantity, location, intent)
-        ▼
- existing CropWise engine   <- UNCHANGED: market.compare_markets(), the
-        │                      recommendation engine, etc. never see language
-        ▼
- app/i18n/templates.py     <- native-language response templates
-        │                      (hand-written per language, not machine-
-        │                       translated, so numbers/crops slot in safely)
-        ▼
- native-language text  ->  optional device TTS voice
+        ├── Offered Price
+        ├── Distance
+        ├── Reliability
+        ├── Payment History
+        └── Crop Interest
 ```
 
-**Why this scales**: adding a 16th fully-supported language means adding
-one crop-name dictionary entry per crop, one response-template string, and
-one frontend translation JSON file -- zero changes to routers, models, or
-the recommendation engine.
-
-### Supported languages & capability matrix
-
-"Fully supported" means: UI translated, the assistant can extract intent/
-entities from free text in that language, and it generates a native-
-language response. Everything else is honestly marked instead of faked.
-
-| Language | UI | AI understanding | Native response | Voice input (STT) | Voice output (TTS) |
-|---|---|---|---|---|---|
-| English | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| हिन्दी Hindi | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| मराठी Marathi | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| বাংলা Bengali | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| தமிழ் Tamil | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| తెలుగు Telugu | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| ગુજરાતી Gujarati | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| ಕನ್ನಡ Kannada | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| മലയാളം Malayalam | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| ਪੰਜਾਬੀ Punjabi | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| ଓଡ଼ିଆ Odia | ✅ | ✅ | ✅ | not verified | device-dependent |
-| অসমীয়া Assamese | ✅ | ✅ | ✅ | not verified | device-dependent |
-| اردو Urdu (RTL) | ✅ | ✅ | ✅ | device-dependent | device-dependent |
-| भोजपुरी Bhojpuri | ✅ | ✅ | ✅ | not verified | device-dependent |
-| मैथिली Maithili | ✅ | ✅ | ✅ | not verified | device-dependent |
-| + 23 more (Sanskrit, Nepali, Konkani, Kashmiri, Sindhi, Manipuri, Bodo, Dogri, Santali, Mandarin, Japanese, Korean, Spanish, French, German, Portuguese, Arabic, Russian, Indonesian, Vietnamese, Thai, Turkish, Italian) | selectable | English fallback | English fallback | device-dependent | device-dependent |
-
-The full, machine-readable matrix lives at `backend/app/i18n/languages.py`
-and is also served live at `GET /assistant/languages` -- the frontend's
-language picker (`LanguageSelector.jsx`) reads real-time capability from
-there rather than a hard-coded list, and shows greyed-out icons for
-anything not actually verified.
-
-**"device-dependent" is not a hedge -- it's load-bearing.** Browsers don't
-expose a queryable list of speech-recognition languages, so CropWise never
-claims STT works; it tries, and gracefully falls back to text on any error
-(permission denied, no speech, unsupported locale, network failure). TTS
-*is* queryable (`speechSynthesis.getVoices()`), so CropWise checks it live
-per-language per-device before ever showing a 🔊 button as active.
-
-### How the assistant avoids "silent guessing"
-
-The single biggest fix from the previous iteration: **the assistant used
-to default unknown crops to "Tomato" and unknown locations to "Bilaspur".
-It no longer does either.** If `app/i18n/nlu.py` can't find a crop or
-location anywhere in the (any-language) input, the API returns
-`clarification_needed: "crop"` or `"location"` with a native-language
-question, and the frontend must ask the user -- verified in
-`backend/app/routers/assistant.py` and covered by the test transcript
-below.
-
-### Cross-language marketplace (architecture, honestly scoped)
-
-`CropListing.note`/`BuyerOffer.message` now carry a `language` field
-alongside the original text (`app/models.py`), and
-`app/i18n/translator.py` defines a `TranslationProvider` interface with a
-`NoOpTranslationProvider` implementation. **No external translation API
-key is configured in this build**, so freeform farmer/buyer messages are
-NOT machine-translated yet -- they're preserved with their source language
-and shown as-is, honestly, rather than faking a translation. Swapping in a
-real provider (Google/Azure/AWS Translate) means implementing one class
-and changing one line in `get_translation_provider()`; no caller changes.
-
-What *is* genuinely cross-language today: **canonical entities**. A crop
-is stored once as (e.g.) `"Soybean"` and displayed as `सोयाबीन` to a
-Marathi user and `সয়াবিন` to a Bengali user via `app/i18n/crop_terms.py`
--- this is real, tested, and works regardless of which language a listing
-was created in.
-
-### How to add a new language
-
-1. Add a `LanguageInfo` entry to `backend/app/i18n/languages.py`.
-2. To make it *fully* supported: add crop aliases to `crop_terms.py`,
-   intent keywords to `intents.py`, and a response template to
-   `templates.py`.
-3. Add a matching entry to `frontend/src/i18n/languages.js` and a
-   `frontend/src/i18n/translations/<code>.json` file.
-4. No router, model, or business-logic changes needed.
-
-### Known multilingual limitations (stated honestly, not hidden)
-
-- STT/TTS quality depends entirely on the user's browser/OS -- CropWise
-  cannot guarantee accuracy for any language, only availability.
-- Freeform marketplace text (offer messages, listing notes) is not yet
-  machine-translated (no provider configured) -- original text + source
-  language are preserved and shown as-is to viewers in another language.
-- Location-name recognition in the assistant currently has curated
-  aliases for Hindi/Bengali script spellings of the 10 demo markets;
-  other scripts fall back to asking the user to clarify rather than
-  guessing (tested -- see the Tamil example in the demo instructions).
-- Intent classification is keyword-based (fast, transparent, zero
-  external dependency) rather than a full LLM -- it correctly handles the
-  spec's Marathi/Hindi/Bhojpuri examples but is not general-purpose NLU.
-
-### Multilingual demo instructions
-
-1. Open the app, use the 🌐 language picker (top-right on every page).
-2. Select **मराठी (Marathi)** → go to **🌐 Global Farm Assistant** → type
-   or speak: *"माझ्याकडे २० क्विंटल सोयाबीन आहे. मला कुठे विकल्यास जास्त
-   फायदा होईल?"* → note it asks for your market (never guesses) → add
-   *"रायपुर"* → get a full native-Marathi answer with real numbers.
-3. Switch to **English** mid-conversation and ask a follow-up -- the
-   crop/quantity/location already established are retained.
-4. Switch to **日本語 (Japanese)** and ask the same question in English --
-   see the honest "English fallback" badge (no fake Japanese AI).
-5. Try the 🎤 mic button in a supported browser (Chrome) -- if a language
-   lacks a voice on your machine, CropWise tells you instead of failing
-   silently.
+The system also provides reasons for the ranking instead of simply showing a score.
 
 ---
 
-## Tech stack
+# 🚚 FarmPool
 
-- **Frontend:** React 18 + Vite + Tailwind CSS + Recharts
-- **Backend:** Python FastAPI + SQLAlchemy
-- **Database:** SQLite (zero-config, file-based -- no server to install)
-- **Auth:** JWT (python-jose) + bcrypt password hashing, with a separate
-  admin-role login for the impact dashboard
-- **Multilingual:** custom lightweight i18n (no external translation/LLM
-  API required) -- see "Multilingual architecture" above
-- **Voice:** browser-native Web Speech API (SpeechRecognition +
-  SpeechSynthesis) behind a swappable provider interface
+FarmPool enables farmers travelling toward the same market to share transportation.
+
+Example:
+
+```text
+Farmer A ─────┐
+              │
+Farmer B ─────┼────► Shared Transport ───► Market
+              │
+Farmer C ─────┘
+```
+
+This can reduce:
+
+- Per-farmer transportation cost
+- Empty vehicle capacity
+- Fuel consumption
+- Carbon emissions
+
+### Environmental Impact
+
+Shared transportation can contribute to:
+
+- **Lower CO₂ emissions**
+- **Reduced fuel usage**
+- **Better vehicle utilization**
+- **More sustainable agricultural logistics**
 
 ---
 
-## Project structure
+# 🧮 Profit Calculator
 
+Farmers can compare multiple selling scenarios.
+
+### Example
+
+```text
+Option A → Local Mandi
+Option B → Distant Mandi
+Option C → Direct Buyer
+Option D → FarmPool + Buyer
 ```
+
+Each scenario can show:
+
+```text
+Gross Revenue
+- Transport
+- Mandi Charges
+- Handling
+= Expected Net Income
+```
+
+This helps farmers select the option with the highest expected realization rather than the highest raw price.
+
+---
+
+# 🤝 Group Selling
+
+CropWise supports pooled selling through farmer groups, FPOs and cooperative-style structures.
+
+Each farmer maintains an individual membership and quantity contribution.
+
+The system avoids double-counting when a farmer rejoins an existing group.
+
+---
+
+# 🔔 Alerts & Notifications
+
+CropWise can support notifications for:
+
+- Price changes
+- High-demand opportunities
+- Market opportunities
+- Harvest reminders
+- Buyer activity
+
+---
+
+# 🌐 Multilingual Farm Assistant
+
+The assistant supports natural farmer queries such as:
+
+> “मेरे पास 10 क्विंटल धान है, कहाँ बेचने पर ज्यादा फायदा होगा?”
+
+The system identifies:
+
+```text
+Intent
+Crop
+Quantity
+Location
+```
+
+and then passes those entities to the same market and recommendation engine used by the rest of the application.
+
+The assistant does not silently invent a crop or location when information is missing.
+
+---
+
+# 🔐 Security
+
+CropWise includes:
+
+- JWT authentication
+- bcrypt password hashing
+- Role-based authorization
+- Admin-protected dashboard
+- Server-side marketplace validation
+- Protected user information
+- Environment-variable based secrets
+- Secure database credentials
+
+The earlier implementation also introduced protections for admin routes, user contact information and marketplace offer validation.
+
+---
+
+# 🕵️ User Activity
+
+The admin dashboard can monitor:
+
+- Total registered farmers
+- Total registered buyers
+- Unique users logged in
+- Successful login events
+- Failed login attempts
+- Recent login activity
+
+Login events are stored without recording passwords, tokens or API keys.
+
+---
+
+# 📂 Project Structure
+
+```text
 cropwise/
+│
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app + router wiring
-│   │   ├── config.py            # settings incl. admin creds, runtime secret
-│   │   ├── database.py          # SQLAlchemy engine/session
-│   │   ├── models.py            # DB models (Farmer, Buyer, Listing, Offer, LoginEvent, ...)
-│   │   ├── schemas.py           # Pydantic request/response schemas
-│   │   ├── auth_utils.py        # JWT + password hashing + role guards
-│   │   ├── seed_data.py         # seeds demo data on first run
-│   │   ├── i18n/                # multilingual architecture (see above)
-│   │   │   ├── languages.py     #   capability matrix (38 languages)
-│   │   │   ├── crop_terms.py    #   canonical crop <-> localized display names
-│   │   │   ├── location_terms.py#   market-name alias recognition
-│   │   │   ├── intents.py       #   language-neutral intent keyword classifier
-│   │   │   ├── nlu.py           #   text -> {intent, crop, qty, location}
-│   │   │   ├── templates.py     #   native-language response templates
-│   │   │   └── translator.py    #   TranslationProvider abstraction (marketplace)
-│   │   ├── mock_data/           # crops, markets, historical prices, demo users
-│   │   ├── services/            # recommendation engine, price predictor,
-│   │   │                        #   buyer matcher, transport optimizer, quality grading,
-│   │   │                        #   login_tracking (records login_events, see above)
-│   │   └── routers/             # one router per feature area (16 total)
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── models.py
+│   │   ├── schemas.py
+│   │   ├── auth_utils.py
+│   │   ├── seed_data.py
+│   │   │
+│   │   ├── services/
+│   │   │   ├── recommendation_engine.py
+│   │   │   ├── price_predictor.py
+│   │   │   ├── buyer_matcher.py
+│   │   │   ├── transport_optimizer.py
+│   │   │   └── quality_grading.py
+│   │   │
+│   │   ├── routers/
+│   │   └── i18n/
+│   │
 │   ├── requirements.txt
 │   └── .env.example
-└── frontend/
-    ├── src/
-    │   ├── api/client.js        # single fetch wrapper for the whole API
-    │   ├── context/AuthContext.jsx
-    │   ├── i18n/                # frontend multilingual architecture
-    │   │   ├── languages.js     #   capability matrix mirror
-    │   │   ├── I18nContext.jsx  #   language state, lazy-loaded translations
-    │   │   ├── speech.js        #   SpeechProvider abstraction (STT)
-    │   │   ├── tts.js           #   TTSProvider abstraction (live voice check)
-    │   │   └── translations/    #   *.json per fully-supported language
-    │   ├── components/          # Layout, LanguageSelector, StatCard, ...
-    │   └── pages/                # one page per feature area (15 pages)
-    ├── package.json
-    └── .env.example
+│
+├── frontend/
+│   ├── src/
+│   │   ├── api/
+│   │   ├── context/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   └── i18n/
+│   │
+│   ├── package.json
+│   └── .env.example
+│
+└── README.md
 ```
+
+The structure follows the existing CropWise organization documented in the previous MVP.
 
 ---
 
-## Setup & run instructions
+# ⚙️ Environment Variables
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+ and npm
+## Backend
 
-### 1. Backend
+```env
+DATABASE_URL=postgresql+psycopg2://<user>:<password>@<host>:5432/<database>
+
+SECRET_KEY=<strong-secret-key>
+
+ADMIN_USERNAME=<admin-username>
+ADMIN_PASSWORD=<admin-password>
+
+DATA_GOV_IN_API_KEY=<api-key>
+
+MARKET_DATA_SOURCE=live
+```
+
+## Frontend
+
+```env
+VITE_API_BASE_URL=<backend-url>
+```
+
+**Never commit** **`.env`** **files or database credentials to GitHub.**
+
+---
+
+# ▶️ Local Development
+
+## 1. Clone the repository
+
+```bash
+git clone https://github.com/Abha153/cropwise.git
+cd cropwise
+```
+
+## 2. Backend
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
 
-cp .env.example .env            # defaults already work, edit if you want
+python -m venv venv
+
+# Windows
+venv\Scripts\activate
+
+pip install -r requirements.txt
 
 uvicorn app.main:app --reload --port 8000
 ```
 
-The API is now running at **http://localhost:8000** (interactive docs at
-`http://localhost:8000/docs`). On first startup it automatically **seeds
-the SQLite database** with demo farmers, buyers, listings, offers, and 60
-days of historical prices for every crop/market pair -- you'll see
-`CropWise demo data seeded successfully.` in the console. Nothing further
-to configure.
+## 3. Frontend
 
-### 2. Frontend
-
-In a second terminal:
+Open another terminal:
 
 ```bash
 cd frontend
-cp .env.example .env            # points the frontend at http://localhost:8000
+
 npm install
+
 npm run dev
 ```
 
-Open **http://localhost:5173** in your browser.
+Frontend:
 
-### 3. Log in
+```text
+http://localhost:5173
+```
 
-Use the **"Or try instantly with a demo account"** buttons on the login
-screen, or log in manually with any of these (password for all: `demo1234`):
+Backend:
 
-| Role | Email | Notes |
-|---|---|---|
-| Farmer | `ramesh@cropwise.demo` | Bilaspur · Tomato, Paddy, Soybean |
-| Farmer | `sunita@cropwise.demo` | Raigarh · Onion, Wheat, Maize |
-| Farmer | `manoj@cropwise.demo` | Durg · Maize, Chana, Groundnut |
-| Buyer | `freshfoods@cropwise.demo` | Processor, Raipur |
-| Buyer | `greenbasket@cropwise.demo` | Retailer, Bilaspur |
-| Buyer | `agriexport@cropwise.demo` | Exporter, Durg |
+```text
+http://localhost:8000
+```
 
-You can also register a brand-new farmer or buyer account from scratch --
-registration works fully, no demo data required.
+API documentation:
 
-### Admin dashboard
-
-`/admin` (Impact Dashboard + **User Activity** login tracking, see below)
-is protected by a separate admin login, independent of farmer/buyer
-accounts, and authenticated entirely server-side:
-
-- Credentials are set via `ADMIN_USERNAME` / `ADMIN_PASSWORD` environment
-  variables (see `backend/.env.example`) -- **never hard-coded, never
-  shipped in this README, and never present in the frontend bundle or
-  source.** The frontend admin login form only ever forwards whatever you
-  type to `POST /auth/admin/login`; it has no credentials embedded in it.
-- If you haven't set those environment variables, check your own
-  `backend/.env` (or ask whoever deployed this instance) -- the backend
-  logs a startup warning whenever it's still running on the undocumented
-  fallback used for zero-config local demos, precisely so that fallback is
-  never mistaken for a real, production-ready credential.
-
-### User Activity (login tracking)
-
-The Admin Dashboard's **User Activity** section answers "did registered
-users actually log in", not just "how many accounts exist":
-
-- Total registered farmers / buyers (plain account counts).
-- Unique users logged in today / this week (distinct people with at least
-  one successful login, counted once no matter how many times they signed
-  in).
-- Successful login events today / this month, and failed login attempts
-  today (raw attempt counts -- one person logging in 5 times is 5 events).
-- A **Recent Activity** table of the latest login attempts (user,
-  role, time, success/failed).
-
-This is backed by a new `login_events` table (`app/models.py::LoginEvent`)
-written to on every `POST /auth/login` attempt, and a `last_login` column
-on `Farmer`/`Buyer` kept in sync on each successful login. By design,
-`login_events` never stores passwords, password hashes, tokens, API keys,
-IP addresses, or the raw email that was typed -- only a numeric user id
-(when the attempt matched a real account), role, timestamp, and
-success/failure. See `GET /admin/user-activity`, `GET /admin/recent-activity`,
-and `GET /admin/users` (all admin-authenticated, same guard as `/admin/impact`).
-
-### Deploying updates to Render without losing existing data
-
-This app's database is a single **SQLite file on local disk** (`DATABASE_URL=sqlite:///./cropwise.db`
-by default). That has one critical consequence for a live Render deployment
-with real registered users:
-
-> **⚠️ On most Render web service plans, local disk is *ephemeral* --
-> it is wiped on every redeploy and on every restart, unless you have
-> attached a [Render Disk](https://render.com/docs/disks) (persistent
-> volume) and pointed `DATABASE_URL` at a path inside it.**
-
-This is true regardless of anything in this changeset -- it's a property of
-"SQLite + Render's default ephemeral filesystem", not a bug this update
-introduces or fixes. Two things to check **before** deploying this update
-to a service with real user data:
-
-1. **Confirm a Render Disk is attached** to the web service, mounted at
-   (for example) `/var/data`, and that `DATABASE_URL` is set to
-   `sqlite:////var/data/cropwise.db` (note: **four slashes** for an
-   absolute path) -- not the default relative `./cropwise.db`, which
-   resolves inside the ephemeral container filesystem.
-2. **If you're not sure**, back up the current database first: from a
-   Render shell on the running service, copy whatever file `DATABASE_URL`
-   points at (e.g. `cp cropwise.db /var/data/cropwise-backup-$(date +%F).db`
-   if a disk is mounted at `/var/data`, or download it via `render ssh` /
-   the dashboard's shell before deploying otherwise).
-
-Assuming disk persistence is already in place (or you're fine starting
-fresh), this specific update is safe to deploy on top of existing data:
-
-- Startup runs `Base.metadata.create_all()` then a small additive-only
-  migration (`run_lightweight_migrations()` in `app/database.py`) that only
-  ever *adds* a table (`login_events`) or *adds* a nullable column
-  (`last_login` on `farmers`/`buyers`) -- it never drops a table, drops a
-  column, or rewrites existing row data. See "Migration method" in this
-  README's implementation notes, and `backend/tests/test_login_tracking.py`
-  for the automated regression coverage.
-- Demo seeding (`app/seed_data.py::seed()`) only ever runs when the
-  `farmers` table is completely empty, and is a no-op on every subsequent
-  startup once any farmer exists (whether a demo account or a real
-  registration) -- it cannot duplicate or overwrite rows on redeploy.
-- Login history is necessarily forward-only: `login_events` starts
-  recording from the moment this code is deployed. There is no way to
-  reconstruct who logged in *before* that point, and this app does not
-  claim otherwise anywhere in the admin dashboard.
+```text
+http://localhost:8000/docs
+```
 
 ---
 
-## Security fixes included in this build
+# ☁️ Deployment Architecture
 
-- **Admin endpoints require admin authentication** (`require_admin` role
-  guard) -- previously `/admin/impact` was publicly reachable.
-- **JWT secret is never a publicly-visible hard-coded value** -- if
-  `SECRET_KEY` isn't set in `.env`, the backend generates a random one at
-  startup (logged as a warning) rather than using a known placeholder.
-- **Public farmer/buyer endpoints no longer leak email/phone** -- they
-  return a PII-free public schema; only the authenticated `/me` endpoints
-  include contact details.
-- **Marketplace offers are validated server-side**: price/quantity must be
-  positive, offer quantity can't exceed the listing, offers below the
-  farmer's minimum acceptable price are rejected, and an offer can't be
-  accepted/rejected twice or against an inactive listing.
-- **Group-selling pool membership no longer double-counts** -- a farmer
-  re-joining a pool now updates their own membership row instead of
-  summing on top of a previous join.
-- **Buyer-matching endpoint requires the listing owner's farmer login**
-  (previously unauthenticated).
+```text
+                    INTERNET USERS
+                          │
+                          ▼
+                 ┌─────────────────┐
+                 │     Vercel      │
+                 │ React Frontend  │
+                 └────────┬────────┘
+                          │
+                          ▼
+                 ┌─────────────────┐
+                 │     Render      │
+                 │ FastAPI Backend │
+                 └────────┬────────┘
+                          │
+                     SQLAlchemy
+                          │
+                          ▼
+                 ┌─────────────────┐
+                 │     Supabase    │
+                 │   PostgreSQL    │
+                 └─────────────────┘
+```
 
----
-
-## Suggested demo flow (for judging / presentation)
-
-1. Log in as **Ramesh Kumar** (farmer).
-2. **Market Intelligence** → compare Tomato prices across nearby markets →
-   see the recommended market and the real net profit after transport.
-3. **AgriAdvisor** → ask for a recommendation on the same crop → see the
-   sell-now/hold split and every factor behind it (demand, supply, weather,
-   transport, trend).
-4. **Price Forecast** → view the 7-day forecast chart with confidence score.
-5. **AgriMarket** → open "My listings" → view offers already placed on the
-   seeded Tomato listing → open "Smart buyer matches" → accept the best offer.
-6. **FarmPool** → see shared-transport savings vs. going alone.
-7. **Profit Calculator** → compare "Local Mandi" vs. "Direct Buyer" scenarios.
-8. **Ask AgriAdvisor** → type or speak (🎤 button, Chrome) a question in
-   Hindi: *"मेरे पास 10 क्विंटल धान है, कहाँ बेचने पर ज्यादा फायदा होगा?"*
-9. Log out, log in as **FreshFoods Processing** (buyer) → browse
-   AgriMarket → make an offer on an active listing.
-10. Visit `/admin` for the live **Impact Dashboard**.
+This architecture separates the presentation layer, backend business logic and persistent database layer.
 
 ---
 
-## Notes on data & "real" integrations
+# 📡 External Data Integration
 
-This is a hackathon MVP, so a few things are explicitly simulated rather
-than wired to live external services -- each is written so it's a clean
-drop-in replacement point for the real thing later:
+CropWise is designed to integrate government market-price data.
 
-- **Historical mandi prices** are generated with a seeded random walk
-  (`app/mock_data/historical_prices.py`) instead of a live Agmarknet/eNAM
-  feed. The seed is deterministic per crop/market so the demo is stable.
-- **Price forecasting** uses a transparent linear-trend + volatility model
-  (`app/services/price_predictor.py`) rather than a trained ML model --
-  the return shape is ready to swap in Prophet/XGBoost/LSTM without
-  touching the API or frontend.
-- **Weather risk** is a deterministic simulated signal
-  (`app/services/recommendation_engine.py`) standing in for a live weather API.
-- **AI-ready quality assessment** (`app/services/quality_grading.py`)
-  simulates a computer-vision result from the crop name/image filename --
-  intentionally *not* presented as a live CV model. It validates the full
-  marketplace workflow (grading -> listing -> matching) so a trained image
-  classifier can be dropped into the same service boundary later.
-- **Market data has a real live-data integration point, wired and testable, but unverified by the assistant from its sandbox:**
-  CropWise now queries **two** data.gov.in resources and prefers whichever
-  has data:
-  1. **"Current Daily Price of Various Commodities from Various Markets"**
-     (resource `9ef84268-d588-465a-a308-a864a43d0070`) via
-     `app/services/live_market_data.py`, keyed by an exact `market` name.
-  2. **"Variety-wise Daily Market Prices Data of Commodity"** (resource
-     `35985678-0d79-46b4-9ed6-6f13308a1d24`, capitalized `State`/`District`/
-     `Commodity`/`Arrival_Date` fields, no market filter) via
-     `app/services/district_market_data.py`, keyed by revenue `District`.
+The existing implementation includes integration points for two government data resources and distinguishes between live and demo data.
 
-  A local town like "Bilaspur" is not guaranteed to match the government's
-  exact market-name string, so instead of relying on CropWise's internal
-  town list as ground truth, `app/services/mandi_directory.py` sits in
-  front of both: it discovers the *actual* market names data.gov.in has
-  for a state (`GET /market/live-markets`), fuzzy-matches local names
-  against them (plus a small hand-maintained alias table), maps towns to
-  their revenue district for the second resource, and merges the two --
-  preferring the market-level hit (more mandi-precise) but attaching the
-  district resource's variety-level detail as `district_reference` when
-  both have data.
+The application should clearly label data as:
 
-  When `DATA_GOV_IN_API_KEY` is set and `MARKET_DATA_SOURCE=live` in
-  `backend/.env`, every market-price lookup attempts this live path
-  first and transparently falls back to the seeded demo dataset if
-  neither live source has a record for that combination or both are
-  unreachable. **Every price is labeled `data_source: "live"` or
-  `"demo"` individually** -- never blended or silently mislabeled -- and
-  the Market Intelligence page shows a 🟢 Government Data / 🟡 Demo Data
-  badge per row, driven by the real `GET /market/data-source-status` and
-  per-record `data_source` fields, not a static claim.
+```text
+LIVE
+```
 
-  **Historical price charts and the forecast now only ever use genuine
-  data.** Every successful live fetch is persisted as a real `MarketPrice`
-  row (`data_source="live"`), so honest history accumulates day by day as
-  the app is used. `GET /market/prices` and `GET /forecast` return only
-  those real rows by default; if there isn't enough real history yet they
-  return `available: false` with `"Historical mandi data is currently
-  unavailable."` instead of drawing a chart from the synthetic series.
-  Pass `include_demo=true` to explicitly opt into the old 60-day synthetic
-  series for a walkthrough of the methodology -- every row and the whole
-  response are tagged `is_demo: true` so it's never mistaken for real data.
+or
 
-  **Honesty note on testing:** `api.data.gov.in` is outside this
-  sandbox's network egress allowlist, so the assistant that built this
-  could not observe a live *successful* fetch from either resource --
-  only the fallback path (non-200 / timeout / no records), which is
-  exactly the failure mode the fallback logic is designed for. The
-  discovery, matching, merge, and persistence logic in
-  `mandi_directory.py` / `district_market_data.py` compiles and is
-  structured to be testable with mocked responses, but nobody has yet
-  watched it resolve a real Chhattisgarh mandi/district against the live
-  dataset. **Please verify with real internet access and the regenerated
-  key**, and report back if either response schema differs from what's
-  documented here -- government open-data schemas do occasionally change.
-- **Voice input** uses the browser's native Web Speech API (works in
-  Chrome), so no speech-to-text API key is required. **Voice input
-  (speech-to-text) is intentionally offered for English and Hindi
-  only** -- other languages have full UI/text/assistant support but no
-  microphone button, because Web Speech API recognition quality for
-  most Indian regional languages is inconsistent across browsers/OSes
-  in practice, and CropWise would rather not offer a feature it can't
-  back up reliably.
+```text
+DEMO
+```
 
-## Known limitations
-
-- SQLite is used for zero-config setup; swap `DATABASE_URL` in
-  `backend/.env` for a Postgres URL if you want a production-style DB
-  (the SQLAlchemy models will work unchanged).
-- Image uploads for quality grading are simulated by filename only -- no
-  actual file upload/storage is wired up.
-- The demo dataset covers Chhattisgarh markets/crops; extending to more
-  states just means adding entries to `app/mock_data/locations.py` and
-  `app/mock_data/crops.py`.
+rather than presenting synthetic data as real market information.
 
 ---
 
-## Environment variables
+# 🧠 AI / ML Roadmap
 
-See `backend/.env.example` and `frontend/.env.example`. Both already have
-working defaults -- you only need to edit them if you're changing ports or
-deploying somewhere other than localhost.
+The current MVP uses explainable and deterministic decision logic in several areas.
+
+Future AI/ML expansion can include:
+
+```text
+MVP
+ │
+ ├── Rules-based recommendations
+ ├── Transparent forecasting
+ └── Deterministic quality grading
+        │
+        ▼
+DATA EXPANSION
+        │
+        ▼
+AI / ML
+        │
+        ├── ML price forecasting
+        ├── Demand prediction
+        ├── Computer-vision crop grading
+        ├── Intelligent buyer matching
+        └── Personalized recommendations
+        │
+        ▼
+SCALE
+```
+
+The previous implementation already defines service boundaries intended to allow trained ML/CV models to replace deterministic components later.
+
+---
+
+# 📈 Impact
+
+CropWise aims to improve:
+
+### Economic Impact
+
+- Better price discovery
+- Higher farmer net realization
+- Direct access to buyers
+- Lower transaction costs
+
+### Social Impact
+
+- Better farmer-buyer connectivity
+- Support for cooperative/group selling
+- Multilingual access
+
+### Environmental Impact
+
+- Shared transportation
+- Lower fuel consumption
+- Reduced empty trips
+- Lower estimated CO₂ emissions
+
+---
+
+# 🛣️ Future Scope
+
+### Phase 1 — Current MVP
+
+- Market comparison
+- Farmer-buyer marketplace
+- FarmPool
+- Profit analysis
+- Explainable recommendations
+- Supabase PostgreSQL backend
+
+### Phase 2 — Data Expansion
+
+- More states
+- More commodities
+- Larger historical price datasets
+- More buyer networks
+
+### Phase 3 — AI/ML
+
+- ML-based price prediction
+- Demand forecasting
+- Computer-vision quality assessment
+- Personalized selling recommendations
+
+### Phase 4 — Scale
+
+- FPO partnerships
+- Institutional buyers
+- B2B marketplace
+- Premium analytics
+- Large-scale logistics optimization
+
+---
+
+# 🎯 Suggested Demo Flow
+
+```text
+1. Farmer Login
+        ↓
+2. Market Intelligence
+        ↓
+3. Compare Net Realisation
+        ↓
+4. AgriAdvisor Recommendation
+        ↓
+5. Price Forecast
+        ↓
+6. Create / View AgriMarket Listing
+        ↓
+7. Smart Buyer Matching
+        ↓
+8. FarmPool Transport Savings
+        ↓
+9. Profit Calculator
+        ↓
+10. Multilingual Assistant
+        ↓
+11. Buyer Login + Offer
+        ↓
+12. Admin Impact Dashboard
+```
+
+This follows the existing recommended judging flow.
+
+---
+
+# 📌 Project Highlights
+
+**Smart Markets. Better Prices. Stronger Farmers.**
+
+CropWise brings together:
+
+```text
+Market Data
+     +
+Decision Intelligence
+     +
+Buyer Connectivity
+     +
+Transport Optimization
+     +
+Profit Analysis
+     +
+Cloud Database
+     =
+Integrated Farmer Market Platform
+```
+
+---
+
+# 🔗 Links
+
+**GitHub:**
+https://github.com/Abha153/cropwise
+
+**Live Application:**
+[https://cropwise-alpha.vercel.app](https://cropwise-alpha.vercel.app/)
+
+---
+
+# 📜 Project Status
+
+**Current Stage:** MVP
+
+**Architecture:** Full-stack cloud deployment
+
+**Database:** PostgreSQL on Supabase
+
+**Frontend:** React + Vite + Tailwind CSS
+
+**Backend:** FastAPI + SQLAlchemy
+
+**Deployment:** Vercel + Render + Supabase
+
+**Primary Goal:** Strengthen market linkages and improve farmer price discovery and net realization.
+
+---
