@@ -24,3 +24,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Large research/demo videos
+research paper and diagrams/*.mp4
