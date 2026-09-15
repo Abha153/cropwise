@@ -145,6 +145,18 @@ class MarketPrice(Base):
     # prevent. Nullable with no default: unset really means NULL.
     arrivals_tonnes = Column(Float, nullable=True)
     data_source = Column(String, default="demo", nullable=False)
+    # Multi-source attribution (nullable, additive -- see
+    # run_lightweight_migrations() for the existing-table upgrade path).
+    # `source` names which live provider(s) this row came from, e.g.
+    # "data.gov.in", "agmarknet", or "data.gov.in+agmarknet" when both
+    # agreed on the same observation -- always NULL for data_source="demo"
+    # rows, since "demo" already unambiguously means no live provider was
+    # involved. `source_timestamp` is the provider's own reported fetch
+    # time (mandi_directory's `fetched_at`), distinct from `date` (the
+    # market/observation date) and from any DB row-creation time -- it is
+    # what lets a caller tell a fresh live read apart from a stale one.
+    source = Column(String, nullable=True)
+    source_timestamp = Column(String, nullable=True)
 
 
 class Notification(Base):

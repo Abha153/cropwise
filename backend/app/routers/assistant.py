@@ -290,6 +290,25 @@ def ask(payload: schemas.AssistantAsk, db: Session = Depends(get_db)):
         if outcome.get("data_source"):
             tag = "live government price" if outcome["data_source"] == "live" else "\U0001F7E1 demo data"
             price_line = f"\u20b9{outcome['modal_price']}/kg ({tag}, range \u20b9{outcome['min_price']}-\u20b9{outcome['max_price']})"
+            # Multi-source attribution: only meaningful for a live result --
+            # demo data has no "source" in this sense. See
+            # mandi_directory.fetch_price_result's docstring for how
+            # `sources`/`source_conflict` are decided (data.gov.in and
+            # Agmarknet are queried concurrently and combined, never one
+            # silently overriding the other).
+            sources = outcome.get("sources") or []
+            if outcome["data_source"] == "live" and len(sources) > 1:
+                price_line += f" -- found in both {' and '.join(sources)}"
+                if outcome.get("source_conflict"):
+                    per_source = ", ".join(
+                        f"{src}: \u20b9{vals['modal_price']}/kg"
+                        for src, vals in (outcome.get("source_values") or {}).items()
+                        if vals.get("modal_price") is not None
+                    )
+                    price_line += f"; these sources disagree ({per_source}) -- showing the most recent observation"
+                price_line += f". Sources: {' + '.join(sources)}."
+            elif outcome["data_source"] == "live" and sources:
+                price_line += f". Source: {sources[0]}."
         else:
             price_line = outcome.get("message") or "No price data available for this selection."
         text = with_fallback_note(render_price_lookup(

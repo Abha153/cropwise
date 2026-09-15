@@ -25,5 +25,9 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Large research/demo videos
-research paper and diagrams/*.mp4
+# Python generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db

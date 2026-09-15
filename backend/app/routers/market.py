@@ -1,4 +1,6 @@
 import datetime as dt
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -69,27 +71,31 @@ def live_markets(state: str = settings.default_demo_state):
 @router.get("/data-source-status")
 def data_source_status():
     """Lets the frontend show an accurate 🟢 Live / 🟡 Demo badge without
-    guessing -- reflects the actual configured/available data source."""
+    guessing -- reflects the actual configured/available data source(s)."""
+    both_configured = live_market_data.is_configured() and agmarknet_service.is_configured()
     return {
         "live_data_configured": (
             live_market_data.is_configured() or agmarknet_service.is_configured()
         ),
         "provider": (
-            agmarknet_service.status()["provider"]
-            or ("data.gov.in (Agmarknet)" if live_market_data.is_configured() else None)
+            "data.gov.in + Agmarknet" if both_configured else
+            "Agmarknet" if agmarknet_service.is_configured() else
+            "data.gov.in" if live_market_data.is_configured() else None
         ),
         "providers": {
             "data.gov.in": {
                 "configured": live_market_data.is_configured(),
                 "available": live_market_data.is_configured(),
             },
-            "CEDA_AGMARKNET": agmarknet_service.status(),
+            "agmarknet": agmarknet_service.status(),
         },
         "fallback": "Demo/seeded mandi-style dataset",
         "note": (
-            "CropWise tries data.gov.in first, then CEDA AGMARKNET when "
-            "configured, and transparently falls back to the seeded dataset "
-            "(labeled per-record) when live sources are unavailable."
+            "CropWise queries data.gov.in and Agmarknet CONCURRENTLY (not "
+            "one as a fallback for the other) whenever both are "
+            "configured, combines their results with source attribution, "
+            "and transparently falls back to the seeded dataset (labeled "
+            "per-record) only when neither live source has usable data."
         ),
     }
 
@@ -112,7 +118,10 @@ def _record_live_snapshot(db: Session, crop: str, local_market: str, live: dict)
     re-hit) doesn't create duplicate rows. Never raises -- a persistence
     hiccup should never break the price-lookup request that triggered it.
     """
-    date_str = live.get("arrival_date") or dt.date.today().isoformat()
+    date_str = live.get("date") or dt.date.today().isoformat()
+    sources = live.get("sources") or ([live["source"]] if live.get("source") else [])
+    source_label = "+".join(sources) if sources else None
+    source_timestamp = live.get("fetched_at")
     try:
         existing = (
             db.query(models.MarketPrice)
@@ -128,6 +137,8 @@ def _record_live_snapshot(db: Session, crop: str, local_market: str, live: dict)
             existing.min_price = live["min_price"]
             existing.max_price = live["max_price"]
             existing.modal_price = live["modal_price"]
+            existing.source = source_label
+            existing.source_timestamp = source_timestamp
         else:
             db.add(models.MarketPrice(
                 crop=crop, market=local_market, date=date_str,
@@ -142,6 +153,8 @@ def _record_live_snapshot(db: Session, crop: str, local_market: str, live: dict)
                 # endpoint for how None is now excluded from averages).
                 arrivals_tonnes=None,
                 data_source="live",
+                source=source_label,
+                source_timestamp=source_timestamp,
             ))
         db.commit()
     except Exception as e:
@@ -153,57 +166,42 @@ def _record_live_snapshot(db: Session, crop: str, local_market: str, live: dict)
         logger.debug("_record_live_snapshot failed for %s/%s: %s", crop, local_market, e)
 
 
-def _get_price(db: Session, crop: str, market: str) -> dict:
+def _fetch_price_outcome(crop: str, market: str) -> dict:
     """
-    Real price lookup with four distinct, honestly-reported outcomes (see
-    mandi_directory.fetch_price_result for the full status contract):
-
-      status="ok"             -> live government price, data_source="live".
-                                  source_resource="market" is a genuine
-                                  mandi-specific record ("Government Mandi
-                                  Price"); source_resource="district_variety"
-                                  is the aggregated fallback resource
-                                  ("District Reference Price") and is NEVER
-                                  presented as a mandi modal price -- see
-                                  `district_reference_note`.
-      status="no_records"     -> both live resources responded but neither
-                                  has a record for this exact crop/market/
-                                  state selection. Per spec this must NOT
-                                  fall back to demo data -- returned as-is
-                                  so the caller shows "No official
-                                  government record found for this
-                                  selection."
-      status="error"          -> at least one live resource itself failed
-                                  (network/auth/format). THIS falls back to
-                                  the demo dataset, tagged data_source="demo".
-      status="not_configured" -> live data isn't set up at all -- the
-                                  normal state for a demo deployment, not a
-                                  failure. Also falls back to demo data, but
-                                  without an "unavailable" framing.
-
-    Only a genuine mandi-level ("market") hit is persisted into the
-    historical MarketPrice series (see `_record_live_snapshot`) -- a
-    district-level aggregate is a different granularity and must never be
-    silently blended into the same per-market history.
-
-    Always returns a dict (never None) so callers check `status`/
-    `data_source` instead of special-casing a missing return value.
+    The network-bound half of `_get_price` -- talks to
+    `mandi_directory.fetch_price_result` only, touches no database session.
+    Deliberately separated out so it can be run concurrently across many
+    markets (see `compare_markets`) without ever sharing a SQLAlchemy
+    Session across threads: each worker thread calls only this function,
+    and every DB read/write happens back on the caller's own thread via
+    `_resolve_price` below.
     """
-    outcome = mandi_directory.fetch_price_result(
+    return mandi_directory.fetch_price_result(
         crop, market, state=mandi_directory.state_for_market(market),
     )
 
+
+def _resolve_price(db: Session, crop: str, market: str, outcome: dict) -> dict:
+    """DB-only half of `_get_price`: turns a `_fetch_price_outcome` result
+    into the final response dict, persisting a live snapshot or reading the
+    demo fallback row as needed. Safe to call repeatedly on the same
+    request-scoped `db` Session from a single thread -- never call this
+    from more than one thread against the same Session."""
     if outcome["status"] == "ok":
         live = outcome["data"]
         is_market_level = live.get("source_resource") == "market"
         if is_market_level:
             _record_live_snapshot(db, crop, market, live)
+        sources = live.get("sources") or ([live["source"]] if live.get("source") else [])
         return {
             "status": "ok", "data_source": "live",
-            "provider": live.get("source", live.get("provider", "data.gov.in (Agmarknet)")),
+            "provider": " + ".join(sources) if sources else live.get("provider", "data.gov.in / Agmarknet"),
+            "sources": sources,  # e.g. ["agmarknet"], ["data.gov.in"], or ["agmarknet", "data.gov.in"]
+            "source_conflict": live.get("source_conflict", False),
+            "source_values": live.get("source_values"),  # per-source detail, always present when sources has 2+ entries
             "modal_price": live["modal_price"], "min_price": live["min_price"],
-            "max_price": live["max_price"], "date": live.get("arrival_date") or "",
-            "arrivals_tonnes": live.get("quantity"),
+            "max_price": live["max_price"], "date": live.get("date") or "",
+            "arrivals_tonnes": live.get("arrival"),
             "matched_market_name": live.get("matched_market_name", market),
             "district": mandi_directory.LOCAL_MARKET_TO_DISTRICT.get(market, market),
             "variety": live.get("variety") if is_market_level else None,
@@ -256,6 +254,26 @@ def _get_price(db: Session, crop: str, market: str) -> dict:
         "fetched_at": None, "source_resource": None, "district_reference_note": None,
         "message": reason_message,
     }
+
+
+def _get_price(db: Session, crop: str, market: str) -> dict:
+    """
+    Real price lookup -- see `_fetch_price_outcome` (network) and
+    `_resolve_price` (DB) for the two halves this combines. Four distinct,
+    honestly-reported outcomes (see mandi_directory.fetch_price_result for
+    the full status contract): status="ok" (live), "no_records" (no demo
+    fallback -- a confirmed absence, not an error), "error" (falls back to
+    demo), "not_configured" (falls back to demo, not framed as a failure).
+    Always returns a dict (never None).
+
+    Kept as a single function for every caller except `compare_markets`,
+    which needs the two halves split to fetch several markets' network
+    calls concurrently while keeping all DB access on one thread (see
+    there for why).
+    """
+    outcome = _fetch_price_outcome(crop, market)
+    return _resolve_price(db, crop, market, outcome)
+
 
 
 def _history_rows(db: Session, crop: str, market: str, days: Optional[int] = None,
@@ -341,6 +359,17 @@ def compare_markets(
     crop: str = Query(...), quantity_kg: float = Query(...), location: str = Query(...),
     top_n: int = Query(6, ge=1, le=30), db: Session = Depends(get_db),
 ):
+    """Thin FastAPI wrapper -- all logic lives in `_compare_markets_core` so
+    non-HTTP callers (admin.py's impact dashboard) can pass a shared
+    `outcome_cache` across many calls in the same request without touching
+    this endpoint's public query-parameter contract."""
+    return _compare_markets_core(crop, quantity_kg, location, top_n, db)
+
+
+def _compare_markets_core(
+    crop: str, quantity_kg: float, location: str, top_n: int = 6,
+    db: Session = None, outcome_cache: Optional[dict] = None,
+):
     # compare_markets is called two ways: as an HTTP endpoint (where
     # FastAPI resolves the Query(...) defaults above into real values
     # before this body runs) AND directly as a plain Python function by
@@ -367,11 +396,11 @@ def compare_markets(
     # for transparency (surfaced as `unavailable_markets`), never silently
     # dropped without explanation.
     unavailable_markets = []
+    timing = {"network_calls": 0, "cache_hits": 0, "network_seconds": 0.0}
 
-    def _try_market(m):
-        """Look up one market and return an `options` row, or None if truly
-        nothing (live or demo) exists for it."""
-        latest = _get_price(db, crop, m["name"])
+    def _build_option(m, latest):
+        """Turn a resolved `_resolve_price` result into an `options` row,
+        or None if truly nothing (live or demo) exists for this market."""
         if latest.get("data_source") is None:
             unavailable_markets.append({"market": m["name"], "message": latest["message"]})
             return None
@@ -395,11 +424,70 @@ def compare_markets(
             "net_profit_is_estimated": True,
         }
 
+    # The network half (`_fetch_price_outcome`) is I/O-bound (each call may
+    # hit data.gov.in and/or CEDA over the network, each with its own
+    # several-second timeout) and independent per market -- there is no
+    # reason to pay top_n x single-market-latency sequentially. Fetching
+    # every candidate market's outcome concurrently is what turns a worst
+    # case of (markets x per-market network time) into roughly one single
+    # market's worth of wall-clock time. This was previously a plain `for`
+    # loop and was the dominant cause of multi-minute compare_markets()/
+    # Best Selling Option loads whenever live data was configured but
+    # slow/unreachable.
+    #
+    # Only `_fetch_price_outcome` (pure network, no DB) runs inside the
+    # thread pool. The DB half (`_resolve_price` -- persisting a live
+    # snapshot, reading the demo fallback row) always runs afterwards, back
+    # on this request's own thread, against the single shared `db` Session
+    # -- SQLAlchemy Sessions are not safe to use from multiple threads at
+    # once, so DB access is deliberately kept single-threaded rather than
+    # opening one session per worker.
+    #
+    # `outcome_cache`, when supplied by the caller (admin.py's impact
+    # dashboard is the only current user), is a plain dict shared across
+    # MANY compare_markets calls in the same outer request -- keyed on
+    # (crop, market name), since that's exactly what `_fetch_price_outcome`
+    # itself is keyed on. This is deliberately separate from the TTL caches
+    # already inside live_market_data.py/district_market_data.py/
+    # agmarknet_service.py (those are safe to share, but only within their
+    # own process-lifetime cache); this dict instead guarantees each
+    # distinct (crop, market) pair is fetched over the network AT MOST
+    # ONCE per admin request, even across 50 listings, without waiting on
+    # any TTL. It is never used for a single normal compare_markets() call
+    # (outcome_cache=None there), so the one-request, one-market-set
+    # behaviour every other caller relies on is unchanged.
+    def _fetch_outcomes(markets_to_try):
+        outcomes = {}
+        to_fetch = []
+        for m in markets_to_try:
+            key = (crop, m["name"])
+            if outcome_cache is not None and key in outcome_cache:
+                outcomes[m["name"]] = outcome_cache[key]
+                timing["cache_hits"] += 1
+            else:
+                to_fetch.append(m)
+        if to_fetch:
+            t0 = time.monotonic()
+            with ThreadPoolExecutor(max_workers=min(len(to_fetch), 12)) as pool:
+                future_to_market = {
+                    pool.submit(_fetch_price_outcome, crop, m["name"]): m for m in to_fetch
+                }
+                for future in as_completed(future_to_market):
+                    m = future_to_market[future]
+                    result = future.result()
+                    outcomes[m["name"]] = result
+                    if outcome_cache is not None:
+                        outcome_cache[(crop, m["name"])] = result
+            timing["network_seconds"] += time.monotonic() - t0
+            timing["network_calls"] += len(to_fetch)
+        return outcomes
+
     options = []
-    considered_names = set()
+    considered_names = {m["name"] for m in candidate_markets}
+    outcomes = _fetch_outcomes(candidate_markets)
     for m in candidate_markets:
-        considered_names.add(m["name"])
-        row = _try_market(m)
+        latest = _resolve_price(db, crop, m["name"], outcomes[m["name"]])
+        row = _build_option(m, latest)
         if row:
             options.append(row)
 
@@ -410,17 +498,30 @@ def compare_markets(
     # candidates came up short.
     MIN_OPTIONS = 3
     if len(options) < MIN_OPTIONS:
-        for m in all_markets_by_distance:
-            if len(options) >= MIN_OPTIONS or m["name"] in considered_names:
-                continue
+        remaining = [
+            m for m in all_markets_by_distance
+            if m["name"] not in considered_names
+        ][: MIN_OPTIONS * 2]  # small, bounded extra batch, fetched concurrently too
+        for m in remaining:
             considered_names.add(m["name"])
-            row = _try_market(m)
+        remaining_outcomes = _fetch_outcomes(remaining)
+        for m in remaining:
+            if len(options) >= MIN_OPTIONS:
+                break
+            latest = _resolve_price(db, crop, m["name"], remaining_outcomes[m["name"]])
+            row = _build_option(m, latest)
             if row:
                 options.append(row)
 
     if not options:
         # Genuinely nothing -- not even one demo-backed market -- which in
         # practice only happens for a crop with no seeded data at all.
+        logger.info(
+            "compare_markets timing crop=%s markets=%d network_calls=%d cache_hits=%d "
+            "network_seconds=%.3f result=insufficient_data",
+            crop, len(candidate_markets), timing["network_calls"], timing["cache_hits"],
+            timing["network_seconds"],
+        )
         return {
             "crop": crop, "quantity_kg": quantity_kg, "location": location,
             "options": [], "recommended_market": None,
@@ -452,6 +553,18 @@ def compare_markets(
         data_source_summary = "mixed"
     else:
         data_source_summary = "unavailable"  # unreachable in practice (options is non-empty here)
+
+    # Lightweight, non-sensitive timing diagnostics: no prices, locations,
+    # crop-financial figures, keys, or user data -- just counts and
+    # durations, cheap enough to leave on in production and specific
+    # enough to separate "network was slow" from "something else was slow"
+    # without needing a live debugger session.
+    logger.info(
+        "compare_markets timing crop=%s markets=%d network_calls=%d cache_hits=%d "
+        "network_seconds=%.3f data_source=%s",
+        crop, len(options), timing["network_calls"], timing["cache_hits"],
+        timing["network_seconds"], data_source_summary,
+    )
 
     return {
         "crop": crop,

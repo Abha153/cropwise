@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { ArrowRight, BarChart3, Check, CheckCircle2, ChevronRight, CircleHelp, Database, MapPin, Mic, Package, RefreshCw, Sprout, Truck, Users, Volume2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useI18n } from '../i18n/I18nContext'
@@ -13,6 +15,68 @@ const EXAMPLES_BY_LANG = {
   mr: ['माझ्याकडे २० क्विंटल सोयाबीन आहे रायपुर मध्ये, मला कुठे विकल्यास जास्त फायदा होईल?'],
   bn: ['আমার কাছে ৫ কুইন্টাল পেঁয়াজ আছে দুর্গ-এ'],
   ta: ['எனக்கு பிலாஸ்பூரில் இருந்து 5 குவிண்டல் தக்காளி விற்க வேண்டும்'],
+}
+
+function AssistantWorkspace({
+  t, langInfo, languageSelector, messages, question, setQuestion, loading,
+  listening, pendingTranscript, micError, speechSupported, voiceReplies,
+  setVoiceReplies, startListening, stopListening, confirmTranscript,
+  editTranscript, retryListening, submit, speak,
+}) {
+  const latest = [...messages].reverse().find(message => message.role === 'assistant' && message.meta)
+  const meta = latest?.meta
+  const extracted = [
+    { label: t('assistant.crop'), value: meta?.crop, Icon: Sprout },
+    { label: t('assistant.quantity'), value: meta?.quantity_kg ? `${Number(meta.quantity_kg).toLocaleString()} kg` : null, Icon: Package },
+    { label: t('assistant.location'), value: meta?.location, Icon: MapPin },
+  ]
+  const marketOptions = meta?.market_options || []
+  const prompts = [
+    t('assistant.quickSell'), t('assistant.quickCompare'),
+    t('assistant.quickEarn'), t('assistant.quickBuyers'),
+  ]
+
+  function askPrompt(prompt) {
+    setQuestion(prompt)
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-5">
+      <header className="relative overflow-hidden rounded-3xl bg-[#e8f1e7] dark:bg-forest/45 border border-forest/10 dark:border-white/10 px-6 py-7 md:px-9 md:py-8">
+        <div className="absolute -right-12 -top-20 w-64 h-64 rounded-full border border-forest/10 dark:border-white/10" />
+        <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-5">
+          <div className="flex items-start gap-4"><div className="w-14 h-14 rounded-2xl bg-white/80 dark:bg-white/10 p-1.5 shadow-card"><img src="/apple-touch-icon.png" alt="CropWise" className="w-full h-full rounded-xl object-cover" /></div><div><div className="flex items-center gap-2 text-forest dark:text-marigold text-xs uppercase tracking-[0.18em] font-bold"><Sprout size={15} /> {t('assistant.heroEyebrow')}</div><h1 className="font-display text-3xl md:text-4xl font-bold mt-2">{t('assistant.heroTitle')}</h1><p className="text-ink/60 dark:text-paper/65 mt-2 max-w-xl">{t('assistant.heroSubtitle')}</p></div></div>
+          {languageSelector}
+        </div>
+      </header>
+
+      <div className="flex items-center justify-center gap-2 text-[10px] uppercase tracking-[0.15em] font-bold text-ink/45 dark:text-paper/45"><span className="flex items-center gap-1 text-forest dark:text-marigold"><CheckCircle2 size={14} /> {t('assistant.stepAsk')}</span><ArrowRight size={12} /><span className={meta ? 'text-forest dark:text-marigold' : ''}>{t('assistant.stepUnderstand')}</span><ArrowRight size={12} /><span className={marketOptions.length ? 'text-forest dark:text-marigold' : ''}>{t('assistant.stepCompare')}</span><ArrowRight size={12} /><span>{t('assistant.stepDecide')}</span></div>
+
+      <section className="bg-white dark:bg-white/5 rounded-3xl border border-black/5 dark:border-white/10 shadow-card p-5 md:p-7">
+        <div className="flex items-center justify-between gap-3 mb-4"><div><p className="text-[10px] uppercase tracking-[0.18em] text-forest/60 dark:text-paper/45 font-bold">{t('assistant.contextEyebrow')}</p><h2 className="font-display text-xl md:text-2xl font-bold mt-1">{t('assistant.contextTitle')}</h2></div><div className="text-xs text-ink/45 dark:text-paper/45 flex items-center gap-1"><Database size={13} /> {langInfo.native}</div></div>
+        <form onSubmit={e => { e.preventDefault(); submit() }}>
+          <div className={`relative border-2 rounded-2xl p-3 transition-colors ${listening ? 'border-marigold bg-marigold/5' : 'border-forest/15 dark:border-white/15'}`}>
+            <textarea value={question} onChange={e => setQuestion(e.target.value)} rows={3} dir={langInfo.rtl ? 'rtl' : 'ltr'} placeholder={t('assistant.contextPlaceholder')} className="w-full resize-none bg-transparent outline-none text-base md:text-lg text-ink dark:text-paper placeholder:text-ink/35 dark:placeholder:text-paper/35" />
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-2"><div className="flex flex-wrap gap-1.5">{extracted.map(item => <span key={item.label} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${item.value ? 'bg-forest/10 text-forest dark:bg-white/10 dark:text-paper' : 'bg-black/5 text-ink/40 dark:bg-white/5 dark:text-paper/40'}`}><item.Icon size={12} />{item.value || item.label}</span>)}</div><div className="flex items-center gap-2"><button type="button" onClick={listening ? stopListening : startListening} disabled={!speechSupported} className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${listening ? 'bg-red-500 text-white animate-pulse' : 'bg-wheat dark:bg-white/10 text-forest dark:text-paper disabled:opacity-40'}`} title={listening ? t('listening') : t('assistant.tapToSpeak')}><Mic size={16} />{listening ? t('assistant.listening') : t('assistant.tapToSpeak')}</button><button disabled={loading || !question.trim()} className="inline-flex items-center gap-2 bg-marigold text-ink font-semibold rounded-xl px-4 py-2 text-xs disabled:opacity-50">{loading ? <RefreshCw size={14} className="animate-spin" /> : <ArrowRight size={14} />}{loading ? t('assistant.understanding') : t('assistant.askButton')}</button></div></div>
+          </div>
+        </form>
+        {pendingTranscript && <div className="mt-3 rounded-2xl bg-wheat dark:bg-white/5 p-4"><div className="text-[10px] uppercase tracking-wide text-ink/45 dark:text-paper/45 font-bold">{t('assistant.iHeard')}</div><p className="font-medium mt-1">“{pendingTranscript}”</p><div className="flex flex-wrap gap-2 mt-3"><button onClick={confirmTranscript} className="text-xs bg-forest text-paper rounded-lg px-3 py-2 font-semibold">{t('assistant.confirm')}</button><button onClick={editTranscript} className="text-xs border border-black/10 dark:border-white/15 rounded-lg px-3 py-2">{t('assistant.edit')}</button><button onClick={retryListening} className="text-xs border border-black/10 dark:border-white/15 rounded-lg px-3 py-2">{t('assistant.speakAgain')}</button></div></div>}
+        {micError && <div className="mt-3 text-xs text-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-xl px-3 py-2">{micError}</div>}
+      </section>
+
+      {!messages.length && !meta && <section className="bg-[#f4f0e4] dark:bg-white/5 rounded-3xl border border-[#e7ddc8] dark:border-white/10 p-6 text-center"><div className="w-12 h-12 rounded-full bg-forest text-paper mx-auto flex items-center justify-center"><Sprout size={22} /></div><h2 className="font-display text-xl font-bold mt-3">{t('assistant.emptyTitle')}</h2><p className="text-sm text-ink/60 dark:text-paper/60 mt-1 max-w-md mx-auto">{t('assistant.emptyDescription')}</p></section>}
+
+      <section><div className="flex items-center gap-2 mb-3"><CircleHelp size={16} className="text-marigold-dark" /><h2 className="font-display font-semibold">{t('assistant.tryAsking')}</h2></div><div className="grid sm:grid-cols-2 gap-2">{prompts.map(prompt => <button key={prompt} onClick={() => askPrompt(prompt)} className="text-left bg-white dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-xl px-4 py-3 text-sm hover:border-marigold transition-colors">{prompt}<ArrowRight size={14} className="inline ml-2 text-forest" /></button>)}</div></section>
+
+      {meta && <section className="grid lg:grid-cols-[0.8fr_1.2fr] gap-5"><div className="bg-white dark:bg-white/5 rounded-2xl border border-black/5 dark:border-white/10 shadow-card p-5"><div className="flex items-center justify-between"><h2 className="font-display font-semibold">{t('assistant.yourRequest')}</h2><button onClick={() => setQuestion('')} className="text-xs text-forest font-semibold">{t('assistant.change')}</button></div><div className="space-y-3 mt-4">{extracted.map(item => item.value && <div key={item.label} className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-forest/10 text-forest flex items-center justify-center"><item.Icon size={15} /></div><div><div className="text-[10px] uppercase tracking-wide text-ink/45 dark:text-paper/45">{item.label}</div><div className="font-semibold text-sm">{item.value}</div></div></div>)}</div><Link to="/market-intelligence" className="mt-5 inline-flex items-center gap-2 text-xs font-semibold text-forest">{t('assistant.compareMarkets')} <ArrowRight size={14} /></Link></div><div className="bg-forest text-paper rounded-2xl p-5"><div className="flex items-center gap-2 text-marigold text-[10px] uppercase tracking-[0.16em] font-bold"><CheckCircle2 size={14} /> {t('assistant.latestAnswer')}</div><p className="text-sm leading-relaxed mt-3">{latest?.text || t('assistant.noAnswer')}</p><div className="flex flex-wrap gap-2 mt-4"><span className="text-[11px] text-paper/65">{t('assistant.ruleBasedNotice')}</span>{latest?.meta?.quantity_assumed && <span className="text-[11px] text-marigold">{t('assistant.quantityAssumed')}</span>}</div></div></section>}
+
+      {marketOptions.length > 0 && <section className="bg-white dark:bg-white/5 rounded-2xl border border-black/5 dark:border-white/10 shadow-card overflow-hidden"><div className="px-5 py-4 border-b border-black/5 dark:border-white/10"><p className="text-[10px] uppercase tracking-[0.16em] text-forest/60 dark:text-paper/45 font-bold">{t('assistant.marketOptionsTitle')}</p><h2 className="font-display text-xl font-bold mt-1">{t('assistant.compareAndDecide')}</h2></div><div className="divide-y divide-black/5 dark:divide-white/10">{marketOptions.map((option, index) => <div key={option.market} className={`grid grid-cols-[1fr_auto] sm:grid-cols-[1.4fr_0.8fr_0.8fr_0.9fr] gap-3 items-center px-5 py-4 ${index === 0 ? 'bg-marigold/10' : ''}`}><div><div className="font-semibold flex items-center gap-2">{index === 0 && <CheckCircle2 size={15} className="text-forest" />}{option.market}</div><div className="text-[11px] text-ink/45 dark:text-paper/45">{option.data_source === 'live' ? t('assistant.liveData') : t('assistant.demoData')}</div></div><div className="text-right sm:text-left"><div className="text-[10px] text-ink/45 dark:text-paper/45">{t('assistant.price')}</div><div className="font-mono-data text-sm">₹{option.modal_price_per_kg}/kg</div></div><div className="text-right sm:text-left"><div className="text-[10px] text-ink/45 dark:text-paper/45">{t('assistant.transport')}</div><div className="font-mono-data text-sm">₹{Number(option.transport_cost).toLocaleString()}</div></div><div className="col-span-2 sm:col-span-1 text-right sm:text-left"><div className="text-[10px] text-ink/45 dark:text-paper/45">{t('assistant.netRealization')}</div><div className="font-mono-data font-bold text-sm">₹{Number(option.net_profit).toLocaleString()}</div></div></div>)}</div><div className="flex flex-wrap gap-2 p-5"><Link to="/market-intelligence" className="inline-flex items-center gap-2 bg-forest text-paper rounded-lg px-3 py-2 text-xs font-semibold"><BarChart3 size={14} />{t('assistant.viewMarket')}</Link><Link to="/marketplace" className="inline-flex items-center gap-2 border border-forest/20 text-forest rounded-lg px-3 py-2 text-xs font-semibold"><Users size={14} />{t('assistant.findBuyers')}</Link><button onClick={() => { setQuestion(''); }} className="inline-flex items-center gap-2 border border-black/10 dark:border-white/15 rounded-lg px-3 py-2 text-xs font-semibold"><RefreshCw size={14} />{t('assistant.askAnother')}</button></div></section>}
+
+      {messages.length > 0 && <section className="space-y-2">{messages.slice(-4).map((message, index) => <div key={`${message.role}-${index}`} className={`rounded-2xl px-4 py-3 text-sm ${message.role === 'user' ? 'ml-auto max-w-[88%] bg-marigold/20' : message.error ? 'bg-red-50 text-red-700' : 'bg-forest text-paper max-w-[92%]'}`}><div className="text-[10px] uppercase tracking-wide opacity-60 mb-1">{message.role === 'user' ? t('assistant.you') : t('assistant.cropwise')}</div>{message.text}{message.role === 'assistant' && !message.error && <button onClick={() => speak(message.text)} className="block mt-2 text-xs text-paper/70"><Volume2 size={13} className="inline mr-1" />{t('listenBtn')}</button>}</div>)}</section>}
+
+      <section className="flex flex-wrap items-center justify-between gap-3 text-xs text-ink/50 dark:text-paper/50 border-t border-black/5 dark:border-white/10 pt-4"><div className="flex items-center gap-2"><Volume2 size={14} />{t('assistant.voiceResponses')}<input type="checkbox" checked={voiceReplies} onChange={e => setVoiceReplies(e.target.checked)} /></div><div className="flex items-center gap-2"><CircleHelp size={14} />{t('assistant.howItWorks')}</div></section>
+    </div>
+  )
 }
 
 export default function AskAssistant() {
@@ -138,6 +202,30 @@ export default function AskAssistant() {
 
   const examples = EXAMPLES_BY_LANG[code] || EXAMPLES_BY_LANG.en
   const voiceLangNames = VOICE_INPUT_SUPPORTED_LANGUAGES.map(c => languages.find(l => l.code === c)?.native || c).join(' & ')
+
+  return <AssistantWorkspace
+    code={code}
+    t={t}
+    langInfo={langInfo}
+    languageSelector={<LanguageSelector compact />}
+    messages={messages}
+    question={question}
+    setQuestion={setQuestion}
+    loading={loading}
+    listening={listening}
+    pendingTranscript={pendingTranscript}
+    micError={micError}
+    speechSupported={speechSupported}
+    voiceReplies={voiceReplies}
+    setVoiceReplies={setVoiceReplies}
+    startListening={startListening}
+    stopListening={stopListening}
+    confirmTranscript={confirmTranscript}
+    editTranscript={editTranscript}
+    retryListening={retryListening}
+    submit={submit}
+    speak={speak}
+  />
 
   return (
     <div className="max-w-2xl">

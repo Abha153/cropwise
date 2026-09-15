@@ -36,10 +36,6 @@ const STEPS = [
   { step: '02', titleKey: 'landing.stepProfit', descKey: 'landing.stepProfitDesc' },
   { step: '03', titleKey: 'landing.stepConfidence', descKey: 'landing.stepConfidenceDesc' },
 ]
-function stageLabel(stage) {
-  return stage.label.replace(/^\d+\s/, '')
-}
-
 export default function Landing() {
   const { t } = useI18n()
 
@@ -92,7 +88,7 @@ export default function Landing() {
               </Link>
             </div>
             <p className="text-xs text-ink/40 dark:text-paper/40 mt-6">
-              Multilingual text and interface support · reliable Hindi & English voice assistance
+              {t('landing.voiceSupport')}
             </p>
           </div>
 
@@ -101,30 +97,18 @@ export default function Landing() {
               number field is left blank rather than filled with an invented
               figure. */}
           <div className="relative">
-            <div className="rounded-2xl bg-white dark:bg-white/5 shadow-card border border-black/5 dark:border-white/10 p-5 md:p-6">
-              <p className="font-display font-semibold text-base mb-4">{t('landing.decisionPanelTitle')}</p>
-              <ul className="space-y-3.5">
-                {STAGES.map((stage) => {
-                  const Icon = STAGE_ICON[stage.key]
-                  const dest = NEXT_DESTINATION[stage.key]
-                  return (
-                    <li key={stage.key} className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-full bg-forest/10 dark:bg-forest-light/15 text-forest dark:text-forest-light flex items-center justify-center flex-shrink-0 mt-0.5">
-                        <Icon size={16} />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold">{stageLabel(stage)}</div>
-                        <div className="text-xs text-ink/55 dark:text-paper/55 leading-snug">{dest?.title}</div>
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
-              <div className="mt-5 pt-4 border-t border-black/5 dark:border-white/10 rounded-xl bg-wheat/30 dark:bg-white/5 p-4 -mx-1">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-semibold">{t('dashboard.netRealization')}</span>
-                  <span className="font-mono-data text-ink/30 dark:text-paper/30">—</span>
-                </div>
+            <div className="rounded-3xl bg-white dark:bg-white/5 shadow-premium border border-black/5 dark:border-white/10 p-5 md:p-6">
+              <p className="font-display font-semibold text-base">{t('landing.decisionPanelTitle')}</p>
+              <p className="text-xs text-ink/55 dark:text-paper/55 mt-1 mb-5">{t('landing.decisionPanelSubtitle')}</p>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-forest/5 dark:bg-white/5 p-3"><Sprout size={17} className="mx-auto text-forest" /><div className="text-[11px] font-semibold mt-1">{t('sellingJourney.stage.addProduce')}</div></div>
+                <div className="rounded-xl bg-forest/5 dark:bg-white/5 p-3"><BarChart3 size={17} className="mx-auto text-forest" /><div className="text-[11px] font-semibold mt-1">{t('sellingJourney.stage.marketAnalysis')}</div></div>
+                <div className="rounded-xl bg-marigold/15 p-3"><Wallet size={17} className="mx-auto text-forest" /><div className="text-[11px] font-semibold mt-1">{t('sellingJourney.stage.paymentReceived')}</div></div>
+              </div>
+              <div className="mt-5 pt-4 border-t border-black/5 dark:border-white/10 rounded-xl bg-sand-100 dark:bg-white/5 p-4 -mx-1">
+                <div className="text-[10px] uppercase tracking-wide text-ink/45 dark:text-paper/45 font-bold">{t('dashboard.netRealization')}</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-xs"><span>{t('landing.marketPrice')}</span><strong className="text-right font-mono-data">₹2,450/q</strong><span>{t('landing.transportCost')}</span><strong className="text-right font-mono-data text-ink/60">−₹120/q</strong><span>{t('landing.otherCosts')}</span><strong className="text-right font-mono-data text-ink/60">−₹80/q</strong></div>
+                <div className="flex items-center justify-between border-t border-black/10 dark:border-white/10 mt-2 pt-2 text-sm"><span className="font-semibold">{t('landing.estimatedNet')}</span><strong className="font-mono-data text-forest">₹2,250/q</strong></div>
                 <p className="text-[11px] text-ink/45 dark:text-paper/45 mt-1.5 leading-snug">
                   {t('landing.illustrativeNote')}
                 </p>
@@ -154,8 +138,8 @@ export default function Landing() {
                     <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center ${isFinal ? 'bg-marigold border-marigold text-forest-dark' : 'bg-forest border-forest text-paper'}`}>
                       <Icon size={20} />
                     </div>
-                    <div className="mt-3 font-display font-semibold text-sm">{stageLabel(stage)}</div>
-                    <p className="text-xs text-ink/55 dark:text-paper/55 mt-1 leading-snug">{dest?.description}</p>
+                    <div className="mt-3 font-display font-semibold text-sm">{t(stage.label)}</div>
+                    <p className="text-xs text-ink/55 dark:text-paper/55 mt-1 leading-snug">{dest?.description ? t(dest.description) : ''}</p>
                   </div>
                   {i < STAGES.length - 1 && (
                     <div className="h-0.5 mt-6 flex-1 rounded-full bg-black/10 dark:bg-white/15 relative">
@@ -182,8 +166,8 @@ export default function Landing() {
                     {i < STAGES.length - 1 && <div className="w-0.5 flex-1 min-h-[18px] bg-black/10 dark:bg-white/15" />}
                   </div>
                   <div className="pb-1">
-                    <div className="font-display font-semibold text-sm">{stageLabel(stage)}</div>
-                    <p className="text-xs text-ink/55 dark:text-paper/55 mt-0.5 leading-snug">{dest?.description}</p>
+                    <div className="font-display font-semibold text-sm">{t(stage.label)}</div>
+                    <p className="text-xs text-ink/55 dark:text-paper/55 mt-0.5 leading-snug">{dest?.description ? t(dest.description) : ''}</p>
                   </div>
                 </div>
               )
@@ -193,8 +177,8 @@ export default function Landing() {
       </section>
 
       {/* ---------- Why CropWise ---------- */}
-      <section className="bg-forest text-paper py-16 md:py-20">
-        <div className="max-w-5xl mx-auto px-6 md:px-10">
+      <section className="premium-hero text-paper py-16 md:py-20">
+        <div className="max-w-5xl mx-auto px-6 md:px-10 relative">
           <h2 className="font-display text-2xl md:text-3xl font-bold text-center mb-3">{t('landing.whyHeading')}</h2>
           <p className="text-paper/70 text-center max-w-2xl mx-auto mb-10">
             {t('landing.whyDescription')}
@@ -241,7 +225,7 @@ export default function Landing() {
         <p className="text-center text-ink/60 dark:text-paper/60 mb-12">{t('landing.featuresSubtitle')}</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {FEATURES.map(f => (
-            <div key={f.titleKey} className="bg-white dark:bg-white/5 rounded-2xl p-6 shadow-card border border-black/5 dark:border-white/10 hover:-translate-y-0.5 hover:shadow-lg transition-all">
+            <div key={f.titleKey} className="bg-white dark:bg-white/5 rounded-3xl p-6 shadow-card border border-black/5 dark:border-white/10 hover:-translate-y-0.5 hover:shadow-lifted transition-all">
               <div className="w-11 h-11 rounded-xl bg-forest/10 dark:bg-forest-light/15 text-forest dark:text-forest-light flex items-center justify-center mb-4">
                 <f.icon size={20} />
               </div>
@@ -270,7 +254,9 @@ export default function Landing() {
 
       {/* ---------- Final CTA ---------- */}
       <section className="px-6 md:px-10 py-14">
-        <div className="max-w-4xl mx-auto rounded-2xl bg-forest text-paper px-8 py-10 text-center shadow-card">
+        <div className="max-w-4xl mx-auto rounded-4xl premium-hero text-paper px-8 py-10 text-center shadow-premium relative overflow-hidden">
+          <FieldMotif className="absolute inset-x-0 bottom-0 w-full h-20 text-paper/30 pointer-events-none" />
+          <div className="relative">
           <h2 className="font-display text-2xl font-bold mb-2">{t('landing.finalHeading')}</h2>
           <p className="text-paper/70 mb-6">{t('landing.finalDescription')}</p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3.5">
@@ -280,6 +266,7 @@ export default function Landing() {
             <Link to="/register" className="w-full sm:w-auto bg-white/10 hover:bg-white/15 border border-paper/25 text-paper font-semibold px-8 py-3 rounded-xl transition-colors">
               {t('imBuyer')} 🏢
             </Link>
+          </div>
           </div>
         </div>
       </section>

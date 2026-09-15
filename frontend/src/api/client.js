@@ -8,18 +8,40 @@ function getToken() {
   return localStorage.getItem('cropwise_token')
 }
 
-async function request(path, { method = 'GET', body, auth = false, form = false, token = null } = {}) {
+// Previously this had NO client-side timeout at all: if the backend hung
+// (e.g. a slow/unreachable upstream government API on the server side)
+// the browser would sit on this fetch indefinitely with nothing to show
+// the user but a spinner, until whatever happened server-side eventually
+// resolved -- often minutes later. A request-level timeout means a slow
+// backend surfaces as a fast, clear error the UI can react to (retry,
+// show cached data, etc.) instead of an indefinite hang.
+const DEFAULT_TIMEOUT_MS = 15000
+
+async function request(path, { method = 'GET', body, auth = false, form = false, token = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const headers = {}
   if (!form) headers['Content-Type'] = 'application/json'
   if (auth) {
     const t = token || getToken()
     if (t) headers['Authorization'] = `Bearer ${t}`
   }
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers,
-    body: form ? body : body ? JSON.stringify(body) : undefined,
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: form ? body : body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    })
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
   if (!res.ok) {
     let detail = `Request failed (${res.status})`
     try {
@@ -178,6 +200,10 @@ export const api = {
   myPayments: () => request('/payments/mine', { auth: true }),
   paymentForTransaction: (txnId) => request(`/payments/transaction/${txnId}`, { auth: true }),
   createPayment: (payload) => request('/payments', { method: 'POST', body: payload, auth: true }),
+  createRazorpayOrder: (payload) => request('/payments/create-order', { method: 'POST', body: payload, auth: true }),
+  verifyRazorpayPayment: (id, payload) => request(`/payments/${id}/verify`, { method: 'POST', body: payload, auth: true }),
+  cancelRazorpayPayment: (id) => request(`/payments/${id}/cancel`, { method: 'POST', auth: true }),
+  failRazorpayPayment: (id) => request(`/payments/${id}/failed`, { method: 'POST', auth: true }),
   initiatePayment: (id, method = 'UPI') => request(`/payments/${id}/initiate?payment_method=${encodeURIComponent(method)}`, { method: 'PATCH', auth: true }),
   confirmPaymentReceived: (id) => request(`/payments/${id}/confirm-received`, { method: 'PATCH', auth: true }),
   completeTransaction: (id) => request(`/payments/${id}/complete-transaction`, { method: 'PATCH', auth: true }),

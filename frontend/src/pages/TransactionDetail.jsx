@@ -14,7 +14,7 @@ const STATUS_TONE = {
 }
 const PAYMENT_STATUS_TONE = {
   PENDING: 'neutral', DUE: 'warning', INITIATED: 'info',
-  PAID: 'success', FAILED: 'warning', DISPUTED: 'warning'
+  PAID: 'success', FAILED: 'warning', CANCELLED: 'neutral', DISPUTED: 'warning'
 }
 
 // Next action a user can take from each status
@@ -57,7 +57,18 @@ function Timeline({ events }) {
   )
 }
 
-function PaymentPanel({ txnId, role, txnAmount, onUpdated }) {
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    script.onload = resolve
+    script.onerror = () => reject(new Error('Unable to load Razorpay Checkout'))
+    document.body.appendChild(script)
+  })
+}
+
+function PaymentPanel({ txnId, role, onUpdated }) {
   const { t } = useI18n()
   const [payment, setPayment] = useState(undefined)
   const [busy, setBusy] = useState(false)
@@ -69,19 +80,43 @@ function PaymentPanel({ txnId, role, txnAmount, onUpdated }) {
 
   useEffect(() => { load() }, [load])
 
-  async function initiate() {
+  async function payNow() {
     setBusy(true); setError('')
     try {
-      if (!payment) {
-        const created = await api.createPayment({
-          transaction_id: txnId, amount: txnAmount,
-          payment_method: 'UPI',
-        })
-        await api.initiatePayment(created.id, 'UPI')
-      } else {
-        await api.initiatePayment(payment.id, 'UPI')
-      }
-      load(); onUpdated()
+      const order = await api.createRazorpayOrder({ transaction_id: txnId })
+      await loadRazorpayCheckout()
+      let verified = false
+      const checkout = new window.Razorpay({
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'CropWise',
+        description: `Payment for CropWise transaction #${txnId}`,
+        order_id: order.order_id,
+        notes: { cropwise_transaction_id: String(txnId) },
+        handler: async (response) => {
+          try {
+            await api.verifyRazorpayPayment(order.payment_id, response)
+            verified = true
+            setPayment(await api.paymentForTransaction(txnId))
+            onUpdated()
+          } catch (e) { setError(e.message); await load() }
+        },
+        modal: {
+          ondismiss: async () => {
+            if (!verified) {
+              try { await api.cancelRazorpayPayment(order.payment_id) } catch (e) {}
+              await load()
+            }
+          },
+        },
+      })
+      checkout.on('payment.failed', async () => {
+        try { await api.failRazorpayPayment(order.payment_id) } catch (e) {}
+        setError('Payment was not completed. Your transaction has not been marked as paid.')
+        await load()
+      })
+      checkout.open()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -117,6 +152,21 @@ function PaymentPanel({ txnId, role, txnAmount, onUpdated }) {
           {payment.payment_reference && (
             <div className="text-xs text-ink/50 font-mono-data">{t('transactionDetail.ref', { ref: payment.payment_reference })}</div>
           )}
+          {payment.payment_status === 'PAID' && payment.razorpay_payment_id && (
+            <div className="text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded px-2 py-1">
+              ✓ Payment successful<br />₹{payment.amount.toLocaleString('en-IN')}<br />Payment ID: {payment.razorpay_payment_id}
+            </div>
+          )}
+          {payment.payment_status === 'FAILED' && (
+            <div className="text-xs text-red-600 bg-red-50 dark:bg-red-950/30 rounded px-2 py-1">
+              Payment was not completed. Your transaction has not been marked as paid.
+            </div>
+          )}
+          {payment.payment_status === 'CANCELLED' && (
+            <div className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded px-2 py-1">
+              Payment cancelled. You can try again.
+            </div>
+          )}
           {payment.is_demo && (
             <div className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded px-2 py-1">
               {t('transactionDetail.demoPaymentNotice')}
@@ -130,14 +180,14 @@ function PaymentPanel({ txnId, role, txnAmount, onUpdated }) {
             {payment.received_at && <div>{t('transactionDetail.received', { date: fmt(payment.received_at) })}</div>}
           </div>
           {/* Buyer: initiate if pending/due */}
-          {role === 'buyer' && ['PENDING', 'DUE'].includes(payment.payment_status) && (
-            <button onClick={initiate} disabled={busy}
+          {role === 'buyer' && ['PENDING', 'DUE', 'FAILED', 'CANCELLED', 'INITIATED'].includes(payment.payment_status) && (
+            <button onClick={payNow} disabled={busy}
               className="w-full text-sm bg-forest text-paper font-semibold rounded-lg py-2 disabled:opacity-60">
-              {busy ? t('transactionDetail.processing') : t('transactionDetail.initiatePaymentDemo')}
+              {busy ? 'Opening secure checkout...' : 'Pay Now'}
             </button>
           )}
           {/* Farmer: confirm received if initiated */}
-          {role === 'farmer' && payment.payment_status === 'INITIATED' && (
+          {role === 'farmer' && payment.is_demo && payment.payment_status === 'INITIATED' && (
             <button onClick={confirmReceived} disabled={busy}
               className="w-full text-sm bg-forest text-paper font-semibold rounded-lg py-2 disabled:opacity-60">
               {busy ? t('transactionDetail.confirming') : t('transactionDetail.confirmPaymentReceivedDemo')}
@@ -155,15 +205,10 @@ function PaymentPanel({ txnId, role, txnAmount, onUpdated }) {
         <div className="space-y-2">
           <p className="text-sm text-ink/50 dark:text-paper/50">{t('transactionDetail.noPaymentYet')}</p>
           {role === 'buyer' && (
-            <button onClick={initiate} disabled={busy}
+            <button onClick={payNow} disabled={busy}
               className="w-full text-sm bg-forest text-paper font-semibold rounded-lg py-2 disabled:opacity-60">
-              {busy ? t('transactionDetail.creating') : t('transactionDetail.initiatePaymentDemo')}
+              {busy ? 'Opening secure checkout...' : 'Pay Now'}
             </button>
-          )}
-          {payment === null && (
-            <div className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded px-2 py-1">
-              {t('transactionDetail.demoPaymentNotice')}
-            </div>
           )}
         </div>
       )}

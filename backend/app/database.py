@@ -3,7 +3,17 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.config import settings
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+if not settings.database_url:
+    raise RuntimeError(
+        "DATABASE_URL is not set. CropWise's MVP database is PostgreSQL "
+        "(Supabase) -- there is no local SQLite fallback anymore. Copy "
+        "backend/.env.example to backend/.env and set DATABASE_URL to your "
+        "Supabase connection string (Project Settings -> Database -> "
+        "Connect in the Supabase dashboard)."
+    )
+
+_is_sqlite = settings.database_url.startswith("sqlite")
+connect_args = {"check_same_thread": False} if _is_sqlite else {}
 
 # pool_pre_ping guards against stale connections from a hosted Postgres
 # provider (e.g. Supabase) closing idle connections -- SQLAlchemy will
@@ -12,7 +22,7 @@ connect_args = {"check_same_thread": False} if settings.database_url.startswith(
 engine = create_engine(
     settings.database_url,
     connect_args=connect_args,
-    pool_pre_ping=not settings.database_url.startswith("sqlite"),
+    pool_pre_ping=not _is_sqlite,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -29,44 +39,73 @@ def get_db():
 
 def run_lightweight_migrations():
     """
-    Additive-only migrations for existing tables. Safe to run on every
-    startup -- no-op once columns already exist, never deletes rows.
+    Additive-only migrations for existing tables -- never drops a column,
+    a table, or rewrites existing row data.
+
+    Two independent additive paths, for two different histories:
+
+    1. SQLite-specific (PRAGMA table_info / ALTER TABLE ... ADD COLUMN),
+       from before the project moved to PostgreSQL (Supabase) as its MVP
+       database. Only ever applies to a pre-existing local cropwise.db
+       file.
+    2. Postgres-specific (ALTER TABLE ... ADD COLUMN IF NOT EXISTS, which
+       SQLite doesn't support but Postgres does natively), for columns
+       added to a model AFTER a Supabase database was already
+       initialized -- e.g. `market_prices.source`/`source_timestamp`,
+       added for multi-source (data.gov.in + Agmarknet) attribution. A
+       BRAND NEW Supabase database never needs this path at all: its
+       first `Base.metadata.create_all()` already includes every current
+       column in one shot. This path exists only for a Supabase database
+       that was seeded before a given column existed.
+
+    Safe to run on every startup either way -- no-op once columns already
+    exist, never deletes rows.
     """
-    if not settings.database_url.startswith("sqlite"):
+    from sqlalchemy import text
+
+    if _is_sqlite:
+        with engine.connect() as conn:
+            def add_column_if_missing(table: str, column: str, ddl_type: str):
+                rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+                if not rows:
+                    return  # table doesn't exist yet -- create_all will handle it
+                cols = [row[1] for row in rows]
+                if column not in cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+                    conn.commit()
+
+            # Legacy columns
+            add_column_if_missing("market_prices", "data_source", "VARCHAR NOT NULL DEFAULT 'demo'")
+            add_column_if_missing("farmers", "last_login", "DATETIME")
+            add_column_if_missing("buyers", "last_login", "DATETIME")
+
+            # Phase 10: Transaction lifecycle columns
+            add_column_if_missing("transactions", "lot_id", "INTEGER")
+            add_column_if_missing("transactions", "offer_id", "INTEGER")
+            add_column_if_missing("transactions", "updated_at", "DATETIME")
+
+            # Phase 16: buyer notifications
+            add_column_if_missing("notifications", "buyer_id", "INTEGER")
+
+            # Integration pass: link transport requests to the transaction they
+            # fulfil, so transport status can drive transaction status instead
+            # of the transport module being an isolated island.
+            add_column_if_missing("transport_requests", "transaction_id", "INTEGER")
+
+            # Integration pass: let a buyer offer be made directly on a Lot
+            # (Phase 4 sellable unit) instead of only the legacy CropListing,
+            # and optionally record which BuyerDemand it fulfils -- this is
+            # what actually connects Buyer Demand -> Lot -> Match -> Offer.
+            add_column_if_missing("buyer_offers", "lot_id", "INTEGER")
+            add_column_if_missing("buyer_offers", "buyer_demand_id", "INTEGER")
         return
+
+    # Postgres path: only the columns added after the Supabase migration.
     with engine.connect() as conn:
-        from sqlalchemy import text
-
-        def add_column_if_missing(table: str, column: str, ddl_type: str):
-            rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
-            if not rows:
-                return  # table doesn't exist yet -- create_all will handle it
-            cols = [row[1] for row in rows]
-            if column not in cols:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
-                conn.commit()
-
-        # Legacy columns
-        add_column_if_missing("market_prices", "data_source", "VARCHAR NOT NULL DEFAULT 'demo'")
-        add_column_if_missing("farmers", "last_login", "DATETIME")
-        add_column_if_missing("buyers", "last_login", "DATETIME")
-
-        # Phase 10: Transaction lifecycle columns
-        add_column_if_missing("transactions", "lot_id", "INTEGER")
-        add_column_if_missing("transactions", "offer_id", "INTEGER")
-        add_column_if_missing("transactions", "updated_at", "DATETIME")
-
-        # Phase 16: buyer notifications
-        add_column_if_missing("notifications", "buyer_id", "INTEGER")
-
-        # Integration pass: link transport requests to the transaction they
-        # fulfil, so transport status can drive transaction status instead
-        # of the transport module being an isolated island.
-        add_column_if_missing("transport_requests", "transaction_id", "INTEGER")
-
-        # Integration pass: let a buyer offer be made directly on a Lot
-        # (Phase 4 sellable unit) instead of only the legacy CropListing,
-        # and optionally record which BuyerDemand it fulfils -- this is
-        # what actually connects Buyer Demand -> Lot -> Match -> Offer.
-        add_column_if_missing("buyer_offers", "lot_id", "INTEGER")
-        add_column_if_missing("buyer_offers", "buyer_demand_id", "INTEGER")
+        conn.execute(text(
+            "ALTER TABLE market_prices ADD COLUMN IF NOT EXISTS source VARCHAR"
+        ))
+        conn.execute(text(
+            "ALTER TABLE market_prices ADD COLUMN IF NOT EXISTS source_timestamp VARCHAR"
+        ))
+        conn.commit()

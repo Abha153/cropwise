@@ -13,11 +13,40 @@ from app.config import logger, settings
 
 BASE_URL = "https://api.ceda.ashoka.edu.in/v1"
 REQUEST_TIMEOUT_SECONDS = 8.0
-CACHE_TTL_SECONDS = 3600
+CACHE_TTL_SECONDS = 3600  # commodity/geography reference lists -- change rarely
+PRICE_CACHE_TTL_SECONDS = 600  # 10 minutes -- same policy as live_market_data.py/
+# district_market_data.py for actual price data, which is daily-granularity
+# but still worth a short TTL so a burst of requests for the same
+# crop/market doesn't each re-hit CEDA's price+quantity endpoints.
 
 _cache: dict = {}
 _last_status = {"provider": None, "available": False}
 _SENTINEL = object()
+
+# Failures (timeouts, auth errors, unreachable host, ...) are NOT cached by
+# _cache_get/_cache_set above -- those only ever store a *successful* call's
+# records. Without this, every request in a loop (e.g. compare_markets()
+# trying several markets) re-pays the full REQUEST_TIMEOUT_SECONDS timeout
+# for get_commodities()/get_geographies() again and again even though the
+# underlying failure (e.g. CEDA unreachable) hasn't changed in the last few
+# seconds. This is a short-TTL cache of the failure itself so a burst of
+# calls in the same request cycle fails fast after the first real attempt.
+_FAILURE_CACHE_TTL_SECONDS = 30.0
+_failure_cache: dict = {}
+
+
+def _failure_cached(key: str) -> bool:
+    expires_at = _failure_cache.get(key)
+    if expires_at is None:
+        return False
+    if dt.datetime.utcnow() > expires_at:
+        _failure_cache.pop(key, None)
+        return False
+    return True
+
+
+def _record_failure(key: str) -> None:
+    _failure_cache[key] = dt.datetime.utcnow() + dt.timedelta(seconds=_FAILURE_CACHE_TTL_SECONDS)
 
 
 class AgmarknetError(Exception):
@@ -47,9 +76,9 @@ def _cache_get(key):
     return value
 
 
-def _cache_set(key, value):
+def _cache_set(key, value, ttl_seconds=None):
     _cache[key] = (
-        dt.datetime.utcnow() + dt.timedelta(seconds=CACHE_TTL_SECONDS),
+        dt.datetime.utcnow() + dt.timedelta(seconds=ttl_seconds if ttl_seconds is not None else CACHE_TTL_SECONDS),
         value,
     )
 
@@ -95,20 +124,36 @@ def _list(path: str, key: str, *, json_body: Optional[dict] = None) -> list:
 
 
 def get_commodities() -> list:
+    if not is_configured():
+        raise AgmarknetError("CEDA API key is not configured")
     cached = _cache_get("commodities")
     if cached is not _SENTINEL:
         return cached
-    records = _list("/agmarknet/commodities", "commodities")
+    if _failure_cached("commodities"):
+        raise AgmarknetError("CEDA request failed (recently failed, not retried yet)")
+    try:
+        records = _list("/agmarknet/commodities", "commodities")
+    except AgmarknetError:
+        _record_failure("commodities")
+        raise
     _cache_set("commodities", records)
     _last_status.update(provider="CEDA_AGMARKNET", available=True)
     return records
 
 
 def get_geographies() -> list:
+    if not is_configured():
+        raise AgmarknetError("CEDA API key is not configured")
     cached = _cache_get("geographies")
     if cached is not _SENTINEL:
         return cached
-    records = _list("/agmarknet/geographies", "geographies")
+    if _failure_cached("geographies"):
+        raise AgmarknetError("CEDA request failed (recently failed, not retried yet)")
+    try:
+        records = _list("/agmarknet/geographies", "geographies")
+    except AgmarknetError:
+        _record_failure("geographies")
+        raise
     _cache_set("geographies", records)
     _last_status.update(provider="CEDA_AGMARKNET", available=True)
     return records
@@ -196,7 +241,41 @@ def _resolve_ids(crop: str, state: str, district: str) -> tuple[int, int, int]:
 
 
 def fetch_price(crop: str, market: str, state: str, district: str) -> dict:
-    """Return the latest CEDA price for the requested market, if available."""
+    """Return the latest CEDA price for the requested market, if
+    available. Cached for `PRICE_CACHE_TTL_SECONDS` per (crop, market,
+    state, district) -- this is the actual price fetch, not the
+    commodity/geography reference-list lookups above (which have their
+    own, separate cache), so without this every repeated request for the
+    same crop/market re-hit CEDA's price + quantity endpoints even
+    seconds apart. Failures are also cached (briefly, via the shared
+    `_failure_cache` mechanism) so a burst of calls to an unreachable
+    CEDA doesn't each re-pay the full request timeout -- but a failure is
+    NEVER cached as if it were a successful "ok" result, and a demo/
+    fallback value is never written into this cache at all (this module
+    only ever sees genuine CEDA responses, never demo data)."""
+    cache_key = f"price:{crop}|{market}|{state}|{district}"
+    cached = _cache_get(cache_key)
+    if cached is not _SENTINEL:
+        return cached
+    if _failure_cached(cache_key):
+        raise AgmarknetError("CEDA price request failed (recently failed, not retried yet)")
+    try:
+        result = _fetch_price_uncached(crop, market, state, district)
+    except AgmarknetError:
+        _record_failure(cache_key)
+        raise
+    if result["status"] == "ok":
+        _cache_set(cache_key, result, ttl_seconds=PRICE_CACHE_TTL_SECONDS)
+    # "no_records" is a genuine, stable answer (this exact selection has
+    # no CEDA record) -- also worth caching briefly so a burst of
+    # requests for the same absent record doesn't each re-query CEDA, but
+    # distinctly from a real "ok" price so it's never mistaken for one.
+    elif result["status"] == "no_records":
+        _cache_set(cache_key, result, ttl_seconds=PRICE_CACHE_TTL_SECONDS)
+    return result
+
+
+def _fetch_price_uncached(crop: str, market: str, state: str, district: str) -> dict:
     commodity_id, state_id, district_id = _resolve_ids(crop, state, district)
     markets = get_markets(commodity_id, state_id, district_id, "price")
     market_id = _find_id(markets, market, "market_id", "market_name")

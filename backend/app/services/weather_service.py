@@ -97,6 +97,14 @@ class WeatherAPIError(Exception):
 
 _live_cache: dict = {}  # (rounded_lat, rounded_lon) -> (expires_at, result)
 
+# Failures are NOT written into _live_cache above (that only ever holds a
+# successful result). Without a short negative cache, an unreachable/slow
+# Open-Meteo means every dashboard load re-pays the full
+# REQUEST_TIMEOUT_SECONDS timeout instead of failing fast to the demo
+# fallback after the first attempt.
+_FAILURE_CACHE_TTL_SECONDS = 60.0
+_failure_cache: dict = {}
+
 
 def _cache_key(lat: float, lon: float):
     # Round to ~1.1km precision so nearby requests share a cache entry
@@ -354,13 +362,18 @@ def get_weather(latitude: Optional[float], longitude: Optional[float], location_
         if cached and cached[0] > time.time():
             result = cached[1]
             return {"status": "LIVE", "source": "Open-Meteo", "location": loc_out, **result}
-        try:
-            result = _fetch_live(latitude, longitude)
-            _live_cache[cache_k] = (time.time() + LIVE_CACHE_TTL_SECONDS, result)
-            return {"status": "LIVE", "source": "Open-Meteo", "location": loc_out, **result}
-        except WeatherAPIError as e:
-            logger.info("weather_service: live fetch failed for (%s, %s): %s -- trying demo fallback",
-                        latitude, longitude, e)
+        failure_expires = _failure_cache.get(cache_k)
+        if failure_expires and failure_expires > time.time():
+            logger.debug("weather_service: skipping live fetch, recent failure cached for %s", cache_k)
+        else:
+            try:
+                result = _fetch_live(latitude, longitude)
+                _live_cache[cache_k] = (time.time() + LIVE_CACHE_TTL_SECONDS, result)
+                return {"status": "LIVE", "source": "Open-Meteo", "location": loc_out, **result}
+            except WeatherAPIError as e:
+                logger.info("weather_service: live fetch failed for (%s, %s): %s -- trying demo fallback",
+                            latitude, longitude, e)
+                _failure_cache[cache_k] = time.time() + _FAILURE_CACHE_TTL_SECONDS
 
     seeded = _get_seeded(location_name)
     if seeded:

@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+import time
 
-from app.config import settings
+from app.config import settings, logger
 from app.database import Base, engine, run_lightweight_migrations
+from sqlalchemy import text
 from app.seed_data import seed
 from app.routers import (
     auth, farmers, buyers, listings, offers, market, advisor,
@@ -32,9 +34,29 @@ app.add_middleware(
 )
 
 
+# Lightweight request-timing diagnostic: method, path (no query string --
+# query params can contain user-entered location/crop text), status, and
+# duration only. No headers, bodies, tokens, or user data. Cheap enough to
+# leave on permanently in production, and exactly what's needed to tell
+# "this specific route is slow" apart from "the whole app is slow" (e.g.
+# Render cold start) from server logs alone, without a live debugger.
+@app.middleware("http")
+async def _timing_middleware(request: Request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    duration_ms = (time.monotonic() - start) * 1000
+    logger.info(
+        "request method=%s path=%s status=%d duration_ms=%.1f",
+        request.method, request.url.path, response.status_code, duration_ms,
+    )
+    return response
+
+
 @app.on_event("startup")
 def on_startup():
+    t0 = time.monotonic()
     seed()
+    logger.info("startup: seed() completed in %.3fs", time.monotonic() - t0)
 
 
 @app.get("/")
@@ -49,7 +71,23 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Cheap liveness check: process is up and can talk to the DB. This is
+    exactly what a cold-start-vs-slow-backend diagnostic should hit first
+    (see the deployment notes) -- a slow/failing response here means the
+    process itself or the DB connection is the problem, not any external
+    market/weather provider (this endpoint never calls those)."""
+    t0 = time.monotonic()
+    db_ok = True
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "db_ok": db_ok,
+        "db_check_ms": round((time.monotonic() - t0) * 1000, 1),
+    }
 
 
 app.include_router(auth.router)

@@ -1,4 +1,5 @@
 import datetime as dt
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -8,7 +9,7 @@ from app.database import get_db
 from app import models
 from app.auth_utils import require_admin
 from app.mock_data.locations import nearest_markets
-from app.routers.market import compare_markets
+from app.routers.market import _compare_markets_core
 from app.services.transport_optimizer import shared_transport_plan
 from app.config import logger
 
@@ -51,9 +52,24 @@ def impact_dashboard(db: Session = Depends(get_db), _admin=Depends(require_admin
     # representative sample rather than reworking the whole computation.
     _IMPACT_SAMPLE_SIZE = 50
     sample_listings = sorted(listings, key=lambda l: l.id, reverse=True)[:_IMPACT_SAMPLE_SIZE]
+    # Shared across every listing in this one admin request: many listings
+    # commonly share a crop and nearby markets (e.g. several Wheat listings
+    # from the same district), so the exact same (crop, market) network
+    # lookup would otherwise be repeated once per listing. A plain dict,
+    # scoped to this single request only (never persisted, never shared
+    # across requests -- that's what the TTL caches inside
+    # live_market_data.py/agmarknet_service.py are for), guarantees each
+    # distinct (crop, market) pair is fetched over the network at most once
+    # per /admin/impact call, however many of the 50 sampled listings ask
+    # for it. See _compare_markets_core's outcome_cache docstring note.
+    _outcome_cache: dict = {}
+    t_impact_start = time.monotonic()
     for l in sample_listings:
         try:
-            comp = compare_markets(crop=l.crop, quantity_kg=l.quantity_kg, location=l.location, db=db)
+            comp = _compare_markets_core(
+                crop=l.crop, quantity_kg=l.quantity_kg, location=l.location,
+                db=db, outcome_cache=_outcome_cache,
+            )
             cumulative_income_gain += comp.get("profit_gain_vs_nearest_market", 0)
         except Exception as e:
             # Best-effort dashboard aggregation -- one bad/unmatched listing
@@ -68,6 +84,11 @@ def impact_dashboard(db: Session = Depends(get_db), _admin=Depends(require_admin
                 cumulative_transport_savings += plan.get("estimated_savings", 0)
         except Exception as e:
             logger.debug("impact_dashboard: shared_transport_plan failed for listing %s: %s", l.id, e)
+
+    logger.info(
+        "impact_dashboard timing sample_size=%d distinct_market_lookups=%d elapsed_seconds=%.3f",
+        len(sample_listings), len(_outcome_cache), time.monotonic() - t_impact_start,
+    )
 
     return {
         "farmers_connected": farmer_count,

@@ -60,6 +60,7 @@ returns.
 """
 import datetime as dt
 import difflib
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import httpx
@@ -255,6 +256,111 @@ def resolve_candidate_market_names(local_name: str, state: str = settings.defaul
     return candidates
 
 
+def _normalize_source_record(raw: dict, source: str, source_resource: str) -> dict:
+    """Common shape for a single provider's single record, regardless of
+    which of the three underlying resources (data.gov.in market-level,
+    data.gov.in district/variety-level, or Agmarknet-via-CEDA) produced
+    it. `source` is always exactly "data.gov.in" or "agmarknet" -- never
+    a resource-specific label -- since that's the granularity the rest of
+    the app (and the response text) attributes data to."""
+    return {
+        "source": source,
+        "source_resource": source_resource,  # "market" | "district_variety"
+        "commodity": raw.get("crop"),
+        "market": raw.get("market"),
+        "state": raw.get("state"),
+        "date": raw.get("arrival_date"),
+        "variety": raw.get("variety"),
+        "grade": raw.get("grade"),
+        "min_price": raw.get("min_price"),
+        "max_price": raw.get("max_price"),
+        "modal_price": raw.get("modal_price"),
+        "arrival": raw.get("quantity"),
+        "fetched_at": raw.get("fetched_at"),
+    }
+
+
+# Two modal prices for the same commodity/market/date are treated as
+# "agreeing" (merged silently) if they're within this fraction of each
+# other -- real government price feeds routinely differ by a rupee or two
+# from rounding/timing even when reporting the same underlying mandi
+# session. Anything wider is a genuine discrepancy and must be flagged,
+# never silently averaged away (see module docstring / fetch_price_result).
+_PRICE_AGREEMENT_TOLERANCE = 0.02  # 2%
+
+
+def _parse_source_date(value):
+    """Parse a date string from either provider into a comparable value.
+    data.gov.in reports DD/MM/YYYY; CEDA/Agmarknet reports YYYY-MM-DD.
+    Neither sorts correctly as a plain string against the other, and a
+    naive string comparison would also wrongly treat the same calendar
+    date as two different ones when grouping records -- see
+    `_combine_source_records`. Falls back to datetime.min (sorts first,
+    never wins a "most recent" comparison) for anything unparseable."""
+    if not value:
+        return dt.datetime.min
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return dt.datetime.strptime(value, fmt)
+        except (ValueError, TypeError):
+            continue
+    return dt.datetime.min
+
+
+def _combine_source_records(records: List[dict]) -> dict:
+    """
+    Combine 1+ per-source normalized records (see `_normalize_source_record`)
+    for the same crop/market into one response payload, WITHOUT discarding
+    any source's values.
+
+    Always returns a dict with:
+      sources            -- sorted list of every source that had a usable
+                             record ("data.gov.in", "agmarknet", or both).
+      source_conflict     -- True if 2+ sources reported the same date's
+                             modal price and those prices genuinely
+                             disagree (see _PRICE_AGREEMENT_TOLERANCE).
+      source_values       -- {source_name: normalized_record}, so a caller
+                             can always see exactly what each source said,
+                             even when they disagree.
+      observations        -- every distinct (date, source) record, so two
+                             sources reporting *different* dates are both
+                             preserved rather than one being discarded.
+    Top-level modal_price/min_price/max_price/date/variety/grade/etc. are
+    taken from the MOST RECENT observation across all sources (what "the
+    latest price" means when a caller doesn't care about per-source
+    detail) -- this mirrors the pre-multi-source single-record shape so
+    every existing caller keeps working unchanged.
+    """
+    by_source = {r["source"]: r for r in records}
+    sources = sorted(by_source.keys())
+
+    # "Same observation" = same reported CALENDAR date, not the same raw
+    # string -- data.gov.in reports DD/MM/YYYY, CEDA reports YYYY-MM-DD,
+    # so grouping on the raw string would treat the identical date as two
+    # different ones and silently skip conflict detection entirely. Parse
+    # both into a comparable value before grouping.
+    by_date: dict = {}
+    for r in records:
+        by_date.setdefault(_parse_source_date(r.get("date")), []).append(r)
+
+    conflict = False
+    for parsed_date, recs_for_date in by_date.items():
+        prices = [r["modal_price"] for r in recs_for_date if r.get("modal_price") is not None]
+        if len(prices) >= 2 and max(prices) > 0:
+            spread = (max(prices) - min(prices)) / max(prices)
+            if spread > _PRICE_AGREEMENT_TOLERANCE:
+                conflict = True
+
+    latest = max(records, key=lambda r: _parse_source_date(r.get("date")))
+
+    combined = dict(latest)
+    combined["sources"] = sources
+    combined["source_conflict"] = conflict
+    combined["source_values"] = by_source
+    combined["observations"] = records
+    return combined
+
+
 def fetch_price_result(crop_name: str, local_market: str, state: str = settings.default_demo_state) -> dict:
     """
     Status-aware price lookup -- the single entry point routers should
@@ -262,93 +368,158 @@ def fetch_price_result(crop_name: str, local_market: str, state: str = settings.
     single "use demo data" fallback:
 
       {"status": "ok", "data": {...}}
-          A genuine record was found. `data["source_resource"]` is either:
-            "market"           -- the primary, mandi-specific resource
-                                   matched (via an exact/alias/high-
-                                   confidence candidate name). Label this
-                                   "Government Mandi Price".
-            "district_variety" -- only the district/variety-aggregated
-                                   resource had data. Label this "District
-                                   Reference Price" and show the
-                                   accompanying explanation that it is
-                                   calculated from variety-level records,
-                                   not a specific mandi's modal price --
-                                   see `data["district_reference_note"]`.
+          At least one provider returned a genuine record. `data["sources"]`
+          lists every provider that contributed ("data.gov.in", "agmarknet",
+          or both -- see module docstring for how this is decided).
+          `data["source_conflict"]` is True if the providers genuinely
+          disagree on the same date's modal price (see
+          `_combine_source_records`); `data["source_values"]` always has
+          the full per-source detail, so a caller can show both numbers
+          even when they conflict.
+          `data["source_resource"]` on the top-level (latest) values is
+          either:
+            "market"           -- a real, mandi-specific record.
+                                   Label this "Government Mandi Price".
+            "district_variety" -- data.gov.in's district/variety-
+                                   aggregated resource. Label this
+                                   "District Reference Price" -- see
+                                   `data["district_reference_note"]`.
 
       {"status": "no_records", "data": None}
-          Both live resources responded successfully but neither has a
-          record for this crop/market/state (tried across every
-          candidate market name for the primary resource). This is NOT a
-          failure -- callers should show "No official government record
-          found for this selection." and must NOT substitute demo data.
+          Every configured provider responded successfully but none has a
+          record for this crop/market/state. This is NOT a failure --
+          callers should show "No official government record found for
+          this selection." and must NOT substitute demo data.
 
       {"status": "error", "data": None}
-          At least one of the live resources itself failed (network
-          error, timeout, non-200, bad key, unparseable response) and
-          neither resource produced a genuine record. This is the ONLY
-          status that should trigger a demo-data fallback.
+          At least one configured provider itself failed (network error,
+          timeout, non-200, bad key, unparseable response) and no
+          provider produced a genuine record. This is the ONLY status
+          that should trigger a demo-data fallback.
 
       {"status": "not_configured", "data": None}
-          Live data isn't configured at all (no key / demo mode). Not an
+          No provider is configured at all (no keys / demo mode). Not an
           error -- this is the normal, expected state for a demo
           deployment, so callers should fall back to demo data without
           an "unavailable" framing.
+
+    ARCHITECTURE NOTE (multi-source): data.gov.in and Agmarknet-via-CEDA
+    are queried CONCURRENTLY, not as a first-hit-wins fallback chain --
+    both are genuinely independent government-linked observations of the
+    same underlying mandi, so both are fetched whenever both are
+    configured, normalized into a common shape, and combined by
+    `_combine_source_records` rather than one silently shadowing the
+    other. data.gov.in's own market-level candidate-name resolution (see
+    `resolve_candidate_market_names`) still runs its conservative,
+    confidence-ordered matching internally -- that's data.gov.in's own
+    fetch, not a cross-provider fallback.
     """
-    saw_error = False
-    saw_not_configured = False
+    # Thread-safe-enough append target for each branch's own status
+    # observations (each branch only ever appends from its own worker
+    # thread, list.append is atomic under the GIL, and nothing reads this
+    # list until both futures below have already been resolved).
+    _statuses: list = []
 
-    for candidate in resolve_candidate_market_names(local_market, state):
-        outcome = live_market_data.fetch_live_price_status(crop_name, candidate, state)
-        if outcome["status"] == "ok":
-            data = dict(outcome["result"])
-            data["local_market_name"] = local_market
-            data["matched_market_name"] = candidate
-            data["source_resource"] = "market"
-            return {"status": "ok", "data": data}
-        if outcome["status"] == "error":
-            saw_error = True
-        elif outcome["status"] == "not_configured":
-            saw_not_configured = True
+    def _fetch_data_gov_in() -> Optional[dict]:
+        """data.gov.in's own market-level candidate resolution, sequential
+        and confidence-ordered by design (see module docstring) -- this is
+        internal to the data.gov.in fetch itself, not a fallback to a
+        different provider. Falls back to the district/variety resource
+        only if no market-level candidate has a record; still reported as
+        "data.gov.in" either way."""
+        for candidate in resolve_candidate_market_names(local_market, state):
+            outcome = live_market_data.fetch_live_price_status(crop_name, candidate, state)
+            if outcome["status"] == "ok":
+                result = dict(outcome["result"])
+                result["local_market_name"] = local_market
+                result["matched_market_name"] = candidate
+                record = _normalize_source_record(result, "data.gov.in", "market")
+                record["matched_market_name"] = candidate
+                return record
+            if outcome["status"] == "error":
+                _statuses.append("error")
+            elif outcome["status"] == "not_configured":
+                _statuses.append("not_configured")
+            elif outcome["status"] == "no_records":
+                _statuses.append("no_records")
 
-    district = LOCAL_MARKET_TO_DISTRICT.get(local_market, local_market)
-    district_outcome = district_market_data.fetch_district_variety_price_status(crop_name, district, state)
-    if district_outcome["status"] == "ok":
-        data = dict(district_outcome["result"])
-        data["local_market_name"] = local_market
-        data["matched_market_name"] = f"{district} (district)"
-        data["source_resource"] = "district_variety"
-        data["district_reference_note"] = (
-            "Calculated from available variety-level government records; "
-            "this is not a specific mandi modal price."
-        )
-        return {"status": "ok", "data": data}
-    if district_outcome["status"] == "error":
-        saw_error = True
-    elif district_outcome["status"] == "not_configured":
-        saw_not_configured = True
+        district = LOCAL_MARKET_TO_DISTRICT.get(local_market, local_market)
+        district_outcome = district_market_data.fetch_district_variety_price_status(crop_name, district, state)
+        if district_outcome["status"] == "ok":
+            result = dict(district_outcome["result"])
+            result["local_market_name"] = local_market
+            result["matched_market_name"] = f"{district} (district)"
+            record = _normalize_source_record(result, "data.gov.in", "district_variety")
+            record["matched_market_name"] = result["matched_market_name"]
+            record["district_reference_note"] = (
+                "Calculated from available variety-level government records; "
+                "this is not a specific mandi modal price."
+            )
+            return record
+        if district_outcome["status"] == "error":
+            _statuses.append("error")
+        elif district_outcome["status"] == "not_configured":
+            _statuses.append("not_configured")
+        elif district_outcome["status"] == "no_records":
+            _statuses.append("no_records")
+        return None
 
-    # CEDA is an alternative live provider, never a replacement for either
-    # existing data.gov.in resource. It is tried only after both government
-    # resource paths above fail to provide usable data.
-    if agmarknet_service.is_configured():
+    def _fetch_agmarknet() -> Optional[dict]:
+        if not agmarknet_service.is_configured():
+            _statuses.append("not_configured")
+            return None
         district = LOCAL_MARKET_TO_DISTRICT.get(local_market, local_market)
         try:
-            ceda_outcome = agmarknet_service.fetch_price(
-                crop_name, local_market, state, district,
-            )
+            outcome = agmarknet_service.fetch_price(crop_name, local_market, state, district)
         except agmarknet_service.AgmarknetError:
-            logger.warning("data.gov.in request failed, trying CEDA")
-            ceda_outcome = {"status": "error", "data": None}
-        if ceda_outcome["status"] == "ok":
-            logger.info("CEDA request successful")
-            return ceda_outcome
-        if ceda_outcome["status"] == "error":
-            saw_error = True
+            logger.warning("agmarknet (CEDA) request failed for %s/%s", crop_name, local_market)
+            _statuses.append("error")
+            return None
+        if outcome["status"] == "ok":
+            record = _normalize_source_record(outcome["data"], "agmarknet", "market")
+            record["matched_market_name"] = local_market
+            return record
+        if outcome["status"] == "error":
+            _statuses.append("error")
+        elif outcome["status"] == "no_records":
+            _statuses.append("no_records")
+        return None
 
-    if saw_not_configured and not saw_error:
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_data_gov_in = pool.submit(_fetch_data_gov_in)
+        f_agmarknet = pool.submit(_fetch_agmarknet)
+        data_gov_in_record = f_data_gov_in.result()
+        agmarknet_record = f_agmarknet.result()
+
+    saw_error = "error" in _statuses
+    saw_no_records = "no_records" in _statuses
+    saw_not_configured = "not_configured" in _statuses
+
+    records = [r for r in (data_gov_in_record, agmarknet_record) if r is not None]
+    if records:
+        combined = _combine_source_records(records)
+        # Backward-compatible field name for every existing caller that
+        # doesn't yet know about multi-source (`_resolve_price` etc.):
+        combined["crop"] = combined.pop("commodity", crop_name)
+        return {"status": "ok", "data": combined}
+
+    # Priority when nothing usable was found: a genuine error anywhere
+    # outranks everything (something may be hiding real data behind a
+    # failure); otherwise, if AT LEAST ONE provider was actually
+    # configured and queried and came back with a confirmed empty result,
+    # that's "no_records" (a real answer: no government record exists)
+    # even if the OTHER provider happens not to be configured -- one
+    # provider's non-configuration must never downgrade a definitive
+    # "no_records" from the other into an "unavailable" framing. Only
+    # when NO provider was configured at all does this fall through to
+    # "not_configured".
+    if saw_error:
+        return {"status": "error", "data": None}
+    if saw_no_records:
+        return {"status": "no_records", "data": None}
+    if saw_not_configured:
         return {"status": "not_configured", "data": None}
-    return {"status": "error" if saw_error else "no_records", "data": None}
-
+    return {"status": "no_records", "data": None}
 
 def known_local_markets() -> List[str]:
     return [m["name"] for m in MARKETS]

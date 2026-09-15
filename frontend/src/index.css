@@ -213,3 +213,72 @@ h1, h2, h3, h4, .font-display {
 .dark .bg-amber-400.text-ink {
   color: #17372d !important;
 }
+
+/* ---- Design-system extension (redesign pass) ----
+   Additive utility classes only -- nothing above this line changed, so
+   every page using the pre-existing classes keeps rendering exactly as
+   before. These exist to give flagship surfaces (dashboard hero, landing
+   hero) a premium, editorial feel without pulling in stock photography:
+   a quiet grain texture + a controlled forest gradient, both driven by
+   the theme tokens above so they adapt automatically in dark mode. */
+.premium-hero {
+  background: linear-gradient(135deg, var(--forest) 0%, var(--forest-deep) 62%, #0a201a 100%);
+  position: relative;
+  isolation: isolate;
+}
+
+.premium-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.5;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 14px 14px;
+  pointer-events: none;
+}
+
+.premium-surface {
+  background: var(--surface);
+  border: 1px solid var(--panel-border);
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.advisor-input {
+  width: 100%;
+  border: 1px solid var(--control-border);
+  border-radius: 0.75rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.advisor-input:focus {
+  border-color: #e5b96a;
+  box-shadow: 0 0 0 3px rgba(229, 185, 106, 0.2);
+  outline: none;
+}
+
+.advisor-action {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.8rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.7rem;
+  color: #f4fbf7;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+
+.advisor-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
+}

@@ -22,7 +22,13 @@ class Settings(BaseSettings):
     secret_key: str = _PLACEHOLDER_SECRET
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
-    database_url: str = "sqlite:///./cropwise.db"
+    # CropWise's MVP database is PostgreSQL, hosted on Supabase -- there is
+    # deliberately no SQLite default here anymore. A real deployment (or a
+    # local run) must set DATABASE_URL explicitly via backend/.env (see
+    # backend/.env.example for the exact Supabase connection-string shape).
+    # Left unset, database.py raises a clear startup error rather than
+    # silently falling back to a local file the MVP no longer depends on.
+    database_url: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174,http://127.0.0.1:4174"
 
     # Admin console credentials. In production, ALWAYS set these via
