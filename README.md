@@ -17,110 +17,58 @@ question a farmer actually has:
 
 ---
 
-## Changelog (this pass)
+## Screenshots
 
-- 🌾 **Multi-source market pricing**: data.gov.in and Agmarknet-via-CEDA
-  are now queried **concurrently** (never one as a fallback for the
-  other) for every market-price lookup, normalized into a common shape,
-  and combined with explicit source attribution -- agreeing prices are
-  merged, genuine conflicts (>2% apart) preserve both values instead of
-  picking one, and different-date observations from each provider are
-  both kept. See "Market data has a real, multi-source live-data
-  integration" below for the full contract, caching policy, and honest
-  testing notes. `MarketPrice` rows persisted from a live fetch now also
-  record `source`/`source_timestamp`. A genuinely independent third
-  source was investigated and intentionally not added (see "Third-party
-  sources beyond these two" below).
-- 🗄️ **Database migrated to PostgreSQL (Supabase)**: the MVP no longer
-  uses SQLite or depends on a local `cropwise.db` file. `DATABASE_URL`
-  must now be set (via `backend/.env`, never committed) to a Supabase
-  Postgres connection string -- see `backend/.env.example`. The backend
-  raises a clear startup error if it's unset, rather than silently
-  falling back to a local file. Deployment architecture is now
-  **Vercel → Render → Supabase PostgreSQL**. All models/queries were
-  already portable SQLAlchemy (no SQLite-specific types or raw SQL
-  outside the legacy, now-inert `run_lightweight_migrations()` helper),
-  so this was a configuration change, not a data-layer rewrite --
-  verified by running the full schema creation, demo seeding, and a
-  backend API smoke test against a real local PostgreSQL instance. The
-  note below about Render's ephemeral disk (written for the old SQLite
-  setup) is superseded by "Deploying updates to Render
-  (PostgreSQL/Supabase persists data)" further down.
-- 🕵️ **Login activity tracking**: every `POST /auth/login` attempt
-  (success or failure) is now recorded to a new `login_events` table --
-  see "User Activity (login tracking)" below for exactly what is/isn't
-  stored, and the new `GET /admin/user-activity`, `GET
-  /admin/recent-activity`, and `GET /admin/users` endpoints. Existing
-  login behavior and the `/auth/login` response shape are unchanged;
-  `Farmer`/`Buyer` gained a `last_login` column, and existing rows/accounts
-  are unaffected (new column defaults to `NULL`, meaning "not seen yet").
-  Covered by `backend/tests/test_login_tracking.py` (unique-user counting,
-  failed-login identity handling, admin-only access) in addition to the
-  existing suite -- 18/18 tests passing.
-- ⚠️ **Render deployment safety note added**: see "Deploying updates to
-  Render without losing existing data" below -- SQLite on Render's default
-  ephemeral disk does not survive redeploys unless a Render Disk is
-  attached. This is a pre-existing property of the stack, not something
-  introduced by this change, but it's directly relevant to safely shipping
-  this update to a live deployment with real users.
-- 🔐 **Admin credential hardening**: removed the demo admin password from
-  this README, from `backend/.env.example` (now a commented-out template
-  instead of a real committed value), and from the admin login page's
-  frontend source (it used to print the demo password directly under the
-  sign-in form). Admin auth was already, and remains, verified
-  server-side only (`ADMIN_USERNAME`/`ADMIN_PASSWORD` env vars, checked in
-  `app/routers/auth.py::admin_login`) -- the frontend only ever forwards a
-  typed username/password to that endpoint.
-- 🔒 **Security**: rotated the exposed `DATA_GOV_IN_API_KEY`, added a
-  project `.gitignore` (there wasn't one -- `.env` could have been
-  committed), confirmed the key exists only server-side (never in the
-  frontend bundle, logs, or this README).
-- 🗺️ **Mandi discovery/mapping layer** (`app/services/mandi_directory.py`)
-  replaces exact-string market-name matching -- see the live-data section
-  below.
-- 🧭 **Second live resource added** (variety-wise/district data), merged
-  with the first -- prefers whichever has data.
-- 📉 **Historical honesty**: real accumulated live snapshots now persist
-  over time; `/market/prices` and `/forecast` only show genuine data by
-  default, with an explicit `include_demo` opt-in for the old synthetic
-  series instead of presenting it as real.
-- 🎯 **Decision engine**: `/market/compare` now returns a plain-language
-  `why` explanation and an explicit `insufficient_data` message instead of
-  a bare error when nothing can be recommended.
-- 🌗 **Dark/light theme**: a real `ThemeContext` + toggle now exists
-  (persisted, respects OS preference) covering the app shell (sidebar,
-  header, main background/text). Individual page cards still use light
-  surface colors -- full per-page dark styling wasn't exhaustively applied
-  in this pass.
-- ⚠️ Not verified in this pass (no network in the build sandbox): a real
-  successful call to either data.gov.in resource, `npm run build`, and the
-  Python test suite (no tests currently exist in this repo -- see
-  "Known limitations"). All touched Python files do pass `python -m
-  py_compile`.
+<p>
+  <img src="screenshots/Screenshot%202026-09-07%20225620.png" alt="CropWise landing page" width="49%" />
+  <img src="screenshots/Screenshot%202026-09-09%20091208.png" alt="Farmer dashboard, Marathi, desktop" width="49%" />
+</p>
+<p>
+  <img src="screenshots/Screenshot%202026-09-07%20231838.png" alt="Your Selling Journey, mobile" width="32%" />
+  <img src="screenshots/Screenshot%202026-09-07%20225932.png" alt="Price Forecast" width="32%" />
+  <img src="screenshots/Screenshot%202026-09-07%20232042.png" alt="Buyer Demands, dark mode" width="32%" />
+</p>
 
----
+More screenshots covering the rest of the flow (Market Intelligence,
+Best Selling Option, FarmPool, admin dashboards, and both light/dark
+theme) are in [`screenshots/`](screenshots/). A more detailed
+architecture writeup, ER diagrams, and workflow figures live in
+[`research paper and diagrams/`](research%20paper%20and%20diagrams/)
+(`CropWise_Technical_Dossier_Final.pdf` is the fastest way to see the
+system design without reading the code)
 
 ## What's inside
 
 Everything runs on **realistic seeded demo data** (10 real Chhattisgarh
 accounts) so the full flow works immediately with **zero external API keys and zero internet dependency**.
 
-## Razorpay payments (TEST MODE)
+## Payment tracking (simulated -- no real gateway integrated)
 
-The accepted-offer flow creates the existing CropWise `Payment` row in
-`PENDING` state. Buyers can then use **Pay Now** on the transaction detail
-page. The backend derives the amount from `Transaction.total_amount`, creates
-a Razorpay order, and verifies the Checkout signature before changing the
-payment to `PAID`; the frontend can never mark a payment successful by itself.
+Payments have a full, real status lifecycle backed by the database:
+`PENDING → DUE → INITIATED → PAID`, `PENDING → FAILED`, or
+`PENDING/DUE → DISPUTED` (`backend/app/routers/payments.py`). Every
+payment record is explicitly labelled a demo/simulated transaction --
+`app/routers/payments.py`'s own module docstring states this directly:
+*"Simulated payment system for hackathon demo... No real payment gateway
+is integrated."* This status-tracking flow (`/payments/{id}/initiate`,
+`/payments/{id}/confirm-received`) is real and working end to end.
 
-For sandbox testing, create Razorpay **Test Mode** API keys and set
-`RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in `backend/.env`. The secret is
-server-only. Razorpay webhooks are deliberately not enabled in this SIH
-version; Checkout signature verification is the authoritative synchronous
-confirmation path, and the payment/event records are idempotent for repeated
-callbacks. For production, replace both values with Razorpay Live Mode keys
-and add a separately designed webhook path before relying on asynchronous
-settlement notifications.
+**Known inconsistency, stated here rather than hidden:** the frontend
+(`TransactionDetail.jsx`) contains a "Pay Now" button that loads the real
+Razorpay Checkout script and calls `api.createRazorpayOrder` /
+`verifyRazorpayPayment` against `/payments/create-order` and
+`/payments/{id}/verify`. **These backend endpoints do not exist** --
+`payments.py` has no Razorpay integration, no `razorpay` package in
+`requirements.txt`, and no `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET` wired
+into `config.py` or `.env.example`. Clicking "Pay Now" as currently
+pushed will fail against a live backend. This is a leftover from
+in-progress work, not a working feature -- either finish the backend
+order-creation/signature-verification endpoints (Razorpay Test Mode keys,
+server-only secret, verify the Checkout signature before marking
+`PAID`, never trust the frontend to self-report success) or remove the
+dangling frontend call and keep the manual `initiate`/`confirm-received`
+flow as the payment story for this MVP. Don't claim the gateway is live
+until one of those is actually true.
 
 | Area | Feature |
 |---|---|
@@ -324,24 +272,35 @@ cropwise/
 │   │   ├── mock_data/           # crops, markets, historical prices, demo users
 │   │   ├── services/            # recommendation engine, price predictor,
 │   │   │                        #   buyer matcher, transport optimizer, quality grading,
+│   │   │                        #   multi-source market pricing (mandi_directory.py),
 │   │   │                        #   login_tracking (records login_events, see above)
-│   │   └── routers/             # one router per feature area (16 total)
+│   │   └── routers/             # one router per feature area
+│   ├── tests/                   # pytest suite -- see "Setup & run instructions"
+│   │   └── conftest.py          #   forces an in-memory SQLite DB for tests
+│   │                            #   only; never needs real Supabase credentials
+│   ├── validate_p1.py           # legacy phase-by-phase manual smoke scripts,
+│   ├── validate_p2.py           #   pre-dating the pytest suite above. Superseded
+│   ├── validate_p5.py           #   by it -- kept for reference, not required to run.
 │   ├── requirements.txt
 │   └── .env.example
-└── frontend/
-    ├── src/
-    │   ├── api/client.js        # single fetch wrapper for the whole API
-    │   ├── context/AuthContext.jsx
-    │   ├── i18n/                # frontend multilingual architecture
-    │   │   ├── languages.js     #   capability matrix mirror
-    │   │   ├── I18nContext.jsx  #   language state, lazy-loaded translations
-    │   │   ├── speech.js        #   SpeechProvider abstraction (STT)
-    │   │   ├── tts.js           #   TTSProvider abstraction (live voice check)
-    │   │   └── translations/    #   *.json per fully-supported language
-    │   ├── components/          # Layout, LanguageSelector, StatCard, ...
-    │   └── pages/                # one page per feature area (15 pages)
-    ├── package.json
-    └── .env.example
+├── frontend/
+│   ├── src/
+│   │   ├── api/client.js        # single fetch wrapper for the whole API
+│   │   ├── context/AuthContext.jsx
+│   │   ├── i18n/                # frontend multilingual architecture
+│   │   │   ├── languages.js     #   capability matrix mirror
+│   │   │   ├── I18nContext.jsx  #   language state, lazy-loaded translations
+│   │   │   ├── speech.js        #   SpeechProvider abstraction (STT)
+│   │   │   ├── tts.js           #   TTSProvider abstraction (live voice check)
+│   │   │   └── translations/    #   *.json per fully-supported language
+│   │   ├── components/          # Layout, LanguageSelector, StatCard, ...
+│   │   └── pages/                # one page per feature area
+│   ├── package.json
+│   └── .env.example
+├── screenshots/                 # real app screenshots -- see "Screenshots" above
+├── research paper and diagrams/ # technical dossier, research paper, architecture figures
+├── MVP_AUDIT.md                 # honest complete/partial/missing/broken audit, by file
+└── LICENSE
 ```
 
 ---
@@ -374,6 +333,16 @@ days of historical prices for every crop/market pair -- you'll see
 `CropWise demo data seeded successfully.` in the console. This only happens
 once: the seed check is idempotent, so restarting against the same
 already-seeded Supabase database is a fast no-op.
+
+**Running the tests** (from `backend/`, same virtualenv):
+
+```bash
+pytest
+```
+
+113 tests, no live Supabase connection required -- `tests/conftest.py`
+points the suite at an in-memory SQLite database instead, so it never
+touches real data or needs real credentials.
 
 ### 2. Frontend
 
@@ -704,6 +673,13 @@ drop-in replacement point for the real thing later:
 - The demo dataset covers Chhattisgarh markets/crops; extending to more
   states just means adding entries to `app/mock_data/locations.py` and
   `app/mock_data/crops.py`.
+- The frontend's "Pay Now" button calls Razorpay-related backend
+  endpoints that don't exist yet -- see "Payment tracking (simulated)"
+  above for exactly what's real vs. dangling.
+- `backend/validate_p1.py`/`validate_p2.py`/`validate_p5.py` are earlier,
+  ad-hoc phase-validation scripts that predate the pytest suite; some
+  reference the old SQLite `cropwise.db` file the project no longer uses.
+  Superseded by `backend/tests/` -- kept only for historical reference.
 
 ---
 
@@ -718,7 +694,7 @@ everything below is optional.
 |---|---|
 | `DATABASE_URL` | **Required.** Supabase Postgres connection string. |
 | `SECRET_KEY` | JWT signing key. Falls back to a random per-process key with a startup warning if unset -- fine for a local demo, not for anything reachable by others. |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Admin dashboard login. Defaults to a publicly-documented demo login if unset. |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Admin dashboard credentials. Set explicitly in the deployment environment; do not commit production credentials. |
 | `DATA_GOV_IN_API_KEY` | Enables the data.gov.in market-price source. Optional -- leave empty to run on the other source and/or demo data. |
 | `MARKET_DATA_SOURCE` | Set to `live` to require validated data.gov.in responses (see multi-source notes above). |
 | `CEDA_API_KEY` | Enables the Agmarknet-via-CEDA market-price source. Optional, independent of `DATA_GOV_IN_API_KEY` -- either, both, or neither can be set. **There is no separate `AGMARKNET_API_KEY`** -- CEDA's API is the actual Agmarknet integration this project uses. |
