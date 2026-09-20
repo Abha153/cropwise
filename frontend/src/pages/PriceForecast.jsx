@@ -9,6 +9,25 @@ import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  Onion: 'auth.crop.onion',
+  Potato: 'auth.crop.potato',
+  Wheat: 'auth.crop.wheat',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Maize: 'auth.crop.maize',
+  Soybean: 'auth.crop.soybean',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
+
 export default function PriceForecast() {
   const { user } = useAuth()
   const { t } = useI18n()
@@ -69,7 +88,7 @@ export default function PriceForecast() {
         <div>
           <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('common.crop')}</label>
           <select value={crop} onChange={e => setCrop(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm bg-white dark:bg-white/5 dark:text-paper">
-            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
+            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {getLocalizedCropName(c.name, t)}</option>)}
           </select>
         </div>
         <div>

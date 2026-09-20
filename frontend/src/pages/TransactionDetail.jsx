@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
+import { formatTimestamp as fmt } from '../utils/datetime'
 
 const STATUS_TONE = {
   OFFER_CREATED: 'neutral', OFFER_ACCEPTED: 'info', ORDER_CONFIRMED: 'info',
@@ -30,12 +31,6 @@ const BUYER_NEXT = {
   PAYMENT_PENDING: 'PAYMENT_INITIATED',
 }
 
-function fmt(isoStr) {
-  if (!isoStr) return '—'
-  const d = new Date(isoStr)
-  return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
 function Timeline({ events }) {
   const { t } = useI18n()
   return (
@@ -57,16 +52,6 @@ function Timeline({ events }) {
   )
 }
 
-function loadRazorpayCheckout() {
-  if (window.Razorpay) return Promise.resolve()
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
-    script.onload = resolve
-    script.onerror = () => reject(new Error('Unable to load Razorpay Checkout'))
-    document.body.appendChild(script)
-  })
-}
 
 function PaymentPanel({ txnId, role, onUpdated }) {
   const { t } = useI18n()
@@ -80,43 +65,21 @@ function PaymentPanel({ txnId, role, onUpdated }) {
 
   useEffect(() => { load() }, [load])
 
+  // Payment status tracking, not payment processing. CropWise records the
+  // agreed payment lifecycle (PENDING -> INITIATED -> PAID); it does not
+  // move money and is not integrated with a payment gateway. The buyer
+  // marks payment as initiated here, and the farmer confirms receipt --
+  // both are server-timestamped by the backend, never by the client.
   async function payNow() {
     setBusy(true); setError('')
     try {
-      const order = await api.createRazorpayOrder({ transaction_id: txnId })
-      await loadRazorpayCheckout()
-      let verified = false
-      const checkout = new window.Razorpay({
-        key: order.key_id,
-        amount: order.amount,
-        currency: order.currency,
-        name: 'CropWise',
-        description: `Payment for CropWise transaction #${txnId}`,
-        order_id: order.order_id,
-        notes: { cropwise_transaction_id: String(txnId) },
-        handler: async (response) => {
-          try {
-            await api.verifyRazorpayPayment(order.payment_id, response)
-            verified = true
-            setPayment(await api.paymentForTransaction(txnId))
-            onUpdated()
-          } catch (e) { setError(e.message); await load() }
-        },
-        modal: {
-          ondismiss: async () => {
-            if (!verified) {
-              try { await api.cancelRazorpayPayment(order.payment_id) } catch (e) {}
-              await load()
-            }
-          },
-        },
-      })
-      checkout.on('payment.failed', async () => {
-        try { await api.failRazorpayPayment(order.payment_id) } catch (e) {}
-        setError('Payment was not completed. Your transaction has not been marked as paid.')
-        await load()
-      })
-      checkout.open()
+      let p = payment
+      if (!p) {
+        p = await api.createPayment({ transaction_id: txnId })
+      }
+      await api.initiatePayment(p.id)
+      setPayment(await api.paymentForTransaction(txnId))
+      onUpdated()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -152,19 +115,19 @@ function PaymentPanel({ txnId, role, onUpdated }) {
           {payment.payment_reference && (
             <div className="text-xs text-ink/50 font-mono-data">{t('transactionDetail.ref', { ref: payment.payment_reference })}</div>
           )}
-          {payment.payment_status === 'PAID' && payment.razorpay_payment_id && (
+          {payment.payment_status === 'PAID' && (
             <div className="text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded px-2 py-1">
-              ✓ Payment successful<br />₹{payment.amount.toLocaleString('en-IN')}<br />Payment ID: {payment.razorpay_payment_id}
+              {t('transactionDetail.paymentSuccessful')}<br />₹{payment.amount.toLocaleString('en-IN')}
             </div>
           )}
           {payment.payment_status === 'FAILED' && (
             <div className="text-xs text-red-600 bg-red-50 dark:bg-red-950/30 rounded px-2 py-1">
-              Payment was not completed. Your transaction has not been marked as paid.
+              {t('transactionDetail.paymentFailed')}
             </div>
           )}
           {payment.payment_status === 'CANCELLED' && (
             <div className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded px-2 py-1">
-              Payment cancelled. You can try again.
+              {t('transactionDetail.paymentCancelled')}
             </div>
           )}
           {payment.is_demo && (
@@ -183,7 +146,7 @@ function PaymentPanel({ txnId, role, onUpdated }) {
           {role === 'buyer' && ['PENDING', 'DUE', 'FAILED', 'CANCELLED', 'INITIATED'].includes(payment.payment_status) && (
             <button onClick={payNow} disabled={busy}
               className="w-full text-sm bg-forest text-paper font-semibold rounded-lg py-2 disabled:opacity-60">
-              {busy ? 'Opening secure checkout...' : 'Pay Now'}
+              {busy ? t('transactionDetail.recording') : t('transactionDetail.markPaymentInitiated')}
             </button>
           )}
           {/* Farmer: confirm received if initiated */}
@@ -207,9 +170,115 @@ function PaymentPanel({ txnId, role, onUpdated }) {
           {role === 'buyer' && (
             <button onClick={payNow} disabled={busy}
               className="w-full text-sm bg-forest text-paper font-semibold rounded-lg py-2 disabled:opacity-60">
-              {busy ? 'Opening secure checkout...' : 'Pay Now'}
+              {busy ? t('transactionDetail.recording') : t('transactionDetail.markPaymentInitiated')}
             </button>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const RECEIPTABLE_STATUSES = ['COMPLETED', 'PAYMENT_RECEIVED', 'DELIVERED']
+
+// Priority 9 -- UI for the receipt + SHA-256 integrity backend that
+// already existed (POST/GET /receipts/transaction/{id}, GET /receipts/
+// {id}/verify, GET /receipts/{id}/download). This panel only calls those
+// endpoints; it never computes or displays a hash it generated itself --
+// "verified" always means the backend recomputed and compared it.
+function ReceiptPanel({ txnId, status }) {
+  const { t } = useI18n()
+  const [receipt, setReceipt] = useState(undefined) // undefined = loading, null = none yet
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [verification, setVerification] = useState(null) // {valid, ...} | null
+
+  const load = useCallback(() => {
+    api.receiptForTransaction(txnId).then(setReceipt).catch(() => setReceipt(null))
+  }, [txnId])
+
+  useEffect(() => { load() }, [load])
+
+  async function generate() {
+    setBusy(true); setError(''); setVerification(null)
+    try {
+      const r = await api.generateReceipt(txnId)
+      setReceipt(r)
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  async function download() {
+    if (!receipt) return
+    setBusy(true); setError('')
+    try {
+      const text = await api.downloadReceipt(receipt.receipt_id)
+      const blob = new Blob([text], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${receipt.receipt_id}.txt`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  async function verify() {
+    if (!receipt) return
+    setBusy(true); setError('')
+    try {
+      const result = await api.verifyReceipt(receipt.receipt_id)
+      setVerification(result)
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  if (receipt === undefined) return <div className="text-xs text-ink/50">{t('common.loading')}</div>
+
+  if (!RECEIPTABLE_STATUSES.includes(status) && !receipt) {
+    return <p className="text-sm text-ink/50 dark:text-paper/50">{t('transactionDetail.receiptNotYetEligible')}</p>
+  }
+
+  return (
+    <div className="space-y-3">
+      {error && <div className="text-xs text-red-600">{error}</div>}
+      {receipt ? (
+        <div className="space-y-2">
+          <div className="text-xs font-mono-data text-ink/70 dark:text-paper/70">{t('transactionDetail.receiptId')}: {receipt.receipt_id}</div>
+          <div className="text-xs text-ink/50 dark:text-paper/50">{t('transactionDetail.generatedAt')}: {fmt(receipt.generated_at)}</div>
+          <div className="text-[11px] font-mono-data break-all text-ink/40 dark:text-paper/40">
+            SHA-256: {receipt.hash_value}
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={download} disabled={busy}
+              className="text-sm bg-forest text-paper font-semibold rounded-lg py-2 px-3 disabled:opacity-60">
+              {t('transactionDetail.downloadReceipt')}
+            </button>
+            <button onClick={verify} disabled={busy}
+              className="text-sm border border-black/10 dark:border-white/15 font-semibold rounded-lg py-2 px-3 disabled:opacity-60">
+              {busy ? t('transactionDetail.verifying') : t('transactionDetail.verifyIntegrity')}
+            </button>
+          </div>
+          {verification && (
+            verification.integrity_verified ? (
+              <div className="text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded px-2 py-1.5">
+                ✅ {t('transactionDetail.receiptVerified')}
+              </div>
+            ) : (
+              <div className="text-xs text-red-600 bg-red-50 dark:bg-red-950/30 rounded px-2 py-1.5">
+                ❌ {t('transactionDetail.receiptMismatch')}
+              </div>
+            )
+          )}
+          <p className="text-[11px] text-ink/40 dark:text-paper/40">{receipt.note}</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-sm text-ink/50 dark:text-paper/50">{t('transactionDetail.noReceiptYet')}</p>
+          <button onClick={generate} disabled={busy}
+            className="w-full text-sm bg-forest text-paper font-semibold rounded-lg py-2 disabled:opacity-60">
+            {busy ? t('transactionDetail.generating') : t('transactionDetail.generateReceipt')}
+          </button>
         </div>
       )}
     </div>
@@ -448,6 +517,14 @@ export default function TransactionDetail() {
             <h2 className="font-display font-semibold text-base mb-4">{t('transactionDetail.payment')}</h2>
             <PaymentPanel txnId={txn.id} role={role} txnAmount={txn.total_amount} onUpdated={load} />
           </div>
+
+          {/* Receipt */}
+          {(RECEIPTABLE_STATUSES.includes(txn.status)) && (
+            <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
+              <h2 className="font-display font-semibold text-base mb-4">{t('transactionDetail.receipt')}</h2>
+              <ReceiptPanel txnId={txn.id} status={txn.status} />
+            </div>
+          )}
 
           {/* Grievance */}
           {canRaiseDispute && (

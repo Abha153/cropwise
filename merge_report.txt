@@ -1,0 +1,69 @@
+﻿Master en.json: 1455 keys
+
+ta:
+  live:  559/1455 valid keys from en master
+  zip:   549/1455
+  root:  0/1455
+  merged: +0 from root, +0 from zip -> 559/1455 valid, 896 still missing
+
+te:
+  live:  351/1455 valid keys from en master
+  zip:   341/1455
+  root:  420/1455
+  merged: +85 from root, +0 from zip -> 436/1455 valid, 1019 still missing
+
+gu:
+  live:  351/1455 valid keys from en master
+  zip:   341/1455
+  root:  420/1455
+  merged: +85 from root, +0 from zip -> 436/1455 valid, 1019 still missing
+
+kn:
+  live:  351/1455 valid keys from en master
+  zip:   341/1455
+  root:  420/1455
+  merged: +85 from root, +0 from zip -> 436/1455 valid, 1019 still missing
+
+as:
+  live:  195/1455 valid keys from en master
+  zip:   185/1455
+  root:  264/1455
+  merged: +85 from root, +0 from zip -> 280/1455 valid, 1175 still missing
+
+bho:
+  live:  196/1455 valid keys from en master
+  zip:   186/1455
+  root:  265/1455
+  merged: +85 from root, +0 from zip -> 281/1455 valid, 1174 still missing
+
+mai:
+  live:  196/1455 valid keys from en master
+  zip:   186/1455
+  root:  265/1455
+  merged: +85 from root, +0 from zip -> 281/1455 valid, 1174 still missing
+
+ml:
+  live:  223/1455 valid keys from en master
+  zip:   209/1455
+  root:  292/1455
+  merged: +85 from root, +0 from zip -> 308/1455 valid, 1147 still missing
+
+or:
+  live:  196/1455 valid keys from en master
+  zip:   186/1455
+  root:  265/1455
+  merged: +85 from root, +0 from zip -> 281/1455 valid, 1174 still missing
+
+pa:
+  live:  196/1455 valid keys from en master
+  zip:   186/1455
+  root:  265/1455
+  merged: +85 from root, +0 from zip -> 281/1455 valid, 1174 still missing
+
+ur:
+  live:  196/1455 valid keys from en master
+  zip:   186/1455
+  root:  265/1455
+  merged: +85 from root, +0 from zip -> 281/1455 valid, 1174 still missing
+
+Done.

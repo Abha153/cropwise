@@ -6,11 +6,31 @@ import { useI18n } from '../i18n/I18nContext'
 import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import Avatar from '../components/Avatar'
+import VerificationBadge from '../components/VerificationBadge'
 
 const CROPS = [
   'Tomato', 'Onion', 'Potato', 'Wheat', 'Paddy (Rice)', 'Maize',
   'Soybean', 'Chana (Gram)', 'Groundnut', 'Mustard'
 ]
+
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  Onion: 'auth.crop.onion',
+  Potato: 'auth.crop.potato',
+  Wheat: 'auth.crop.wheat',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Maize: 'auth.crop.maize',
+  Soybean: 'auth.crop.soybean',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
 
 const STATUS_TONE = {
   ACTIVE: 'success', PARTIALLY_FILLED: 'info',
@@ -18,19 +38,17 @@ const STATUS_TONE = {
 }
 
 const PAYMENT_TERMS_OPTIONS = [
-  'Advance 50%, balance on delivery',
-  'Full payment on delivery',
-  'Full payment within 7 days of delivery',
-  'Cash on delivery',
-  'NEFT within 3 days of delivery',
+  'buyerDemands.paymentTerms.advance50BalanceOnDelivery',
+  'buyerDemands.paymentTerms.fullPaymentOnDelivery',
+  'buyerDemands.paymentTerms.fullPaymentWithin7Days',
+  'buyerDemands.paymentTerms.cashOnDelivery',
+  'buyerDemands.paymentTerms.neftWithin3Days',
 ]
 
 function DemandCard({ demand, buyerMap, role, onRespond, onCancel }) {
   const { t } = useI18n()
   const [showDetail, setShowDetail] = useState(false)
   const buyer = buyerMap[demand.buyer_id] || {}
-
-  const isVerified = buyer.verification_status === 'verified'
 
   return (
     <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
@@ -39,13 +57,10 @@ function DemandCard({ demand, buyerMap, role, onRespond, onCancel }) {
           {role === 'farmer' && <Avatar role="buyer" name={buyer.company_name} size="sm" className="mt-0.5" />}
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-display font-bold text-lg">{demand.crop}</span>
+              <span className="font-display font-bold text-lg">{getLocalizedCropName(demand.crop, t)}</span>
               <Badge tone={STATUS_TONE[demand.status] || 'neutral'}>{t(`buyerDemands.status.${demand.status}`)}</Badge>
-              {isVerified && (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                  ✓ {t('buyerDemands.verifiedBuyer')}
-                </span>
-              )}
+              {/* Doc 11: no generic "Verified Buyer" badge -- always the real 4-tier status */}
+              <VerificationBadge buyerId={demand.buyer_id} />
             </div>
             <div className="text-xs text-ink/50 dark:text-paper/50 mt-0.5">
               {buyer.company_name || t('buyerDemands.buyerHash', { id: demand.buyer_id })}
@@ -245,7 +260,7 @@ function CreateDemandForm({ onCreated, onClose }) {
         <div>
           <label className={lbl}>{t('farmpool.cropLabel')}</label>
           <select value={form.crop} onChange={set('crop')} className={inp}>
-            {CROPS.map(c => <option key={c}>{c}</option>)}
+            {CROPS.map(c => <option key={c} value={c}>{getLocalizedCropName(c, t)}</option>)}
           </select>
         </div>
         <div>
@@ -265,7 +280,7 @@ function CreateDemandForm({ onCreated, onClose }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <div>
           <label className={lbl}>{t('buyerDemands.targetPriceQuintal')}</label>
-          <input type="number" min="0" value={form.target_price_per_kg} onChange={set('target_price_per_kg')} className={inp} placeholder="e.g. 2800" />
+          <input type="number" min="0" value={form.target_price_per_kg} onChange={set('target_price_per_kg')} className={inp} placeholder={t('buyerDemands.examplePrice')} />
         </div>
         <div>
           <label className={lbl}>{t('buyerDemands.minGradeRequired')}</label>
@@ -276,18 +291,18 @@ function CreateDemandForm({ onCreated, onClose }) {
         </div>
         <div>
           <label className={lbl}>{t('buyerDemands.maxMoisture')}</label>
-          <input type="number" min="0" max="100" step="0.1" value={form.moisture_limit} onChange={set('moisture_limit')} className={inp} placeholder="e.g. 12" />
+          <input type="number" min="0" max="100" step="0.1" value={form.moisture_limit} onChange={set('moisture_limit')} className={inp} placeholder={t('buyerDemands.exampleMoisture')} />
         </div>
         <div>
           <label className={lbl}>{t('buyerDemands.maxForeignMatter')}</label>
-          <input type="number" min="0" max="100" step="0.1" value={form.foreign_matter_limit} onChange={set('foreign_matter_limit')} className={inp} placeholder="e.g. 2" />
+          <input type="number" min="0" max="100" step="0.1" value={form.foreign_matter_limit} onChange={set('foreign_matter_limit')} className={inp} placeholder={t('buyerDemands.exampleForeignMatter')} />
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <div>
           <label className={lbl}>{t('buyerDemands.deliveryLocation')}</label>
-          <input value={form.delivery_location} onChange={set('delivery_location')} className={inp} placeholder="e.g. Raipur" />
+          <input value={form.delivery_location} onChange={set('delivery_location')} className={inp} placeholder={t('buyerDemands.exampleLocation')} />
         </div>
         <div>
           <label className={lbl}>{t('buyerDemands.deliveryDeadline')}</label>
@@ -296,7 +311,7 @@ function CreateDemandForm({ onCreated, onClose }) {
         <div>
           <label className={lbl}>{t('buyerDemands.paymentTerms')}</label>
           <select value={form.payment_terms} onChange={set('payment_terms')} className={inp}>
-            {PAYMENT_TERMS_OPTIONS.map(opt => <option key={opt}>{opt}</option>)}
+            {PAYMENT_TERMS_OPTIONS.map(opt => <option key={opt} value={opt}>{t(opt)}</option>)}
           </select>
         </div>
       </div>
@@ -513,7 +528,7 @@ export default function BuyerDemands() {
         <div className="flex items-center gap-3 mt-4 mb-4 flex-wrap">
           <select value={cropFilter} onChange={e => setCropFilter(e.target.value)} className="border border-black/10 dark:border-white/15 rounded-lg px-3 py-2 text-sm bg-white dark:bg-white/5 dark:text-paper">
             <option value="">{t('storage.allCrops')}</option>
-            {CROPS.map(c => <option key={c}>{c}</option>)}
+            {CROPS.map(c => <option key={c} value={c}>{getLocalizedCropName(c, t)}</option>)}
           </select>
         </div>
       )}

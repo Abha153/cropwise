@@ -59,6 +59,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         user = db.query(models.Farmer).filter(models.Farmer.email == email).first()
     elif role == "buyer":
         user = db.query(models.Buyer).filter(models.Buyer.email == email).first()
+    elif role == "transporter":
+        user = db.query(models.Transporter).filter(models.Transporter.email == email).first()
     elif role == "admin":
         # Admin isn't backed by a DB row -- it's a single configured
         # operator account (see app/config.py). The token subject IS the
@@ -90,3 +92,18 @@ def require_admin(current=Depends(get_current_user)):
     if current["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return current["user"]
+
+
+def require_transporter(current=Depends(get_current_user)):
+    if current["role"] != "transporter":
+        raise HTTPException(status_code=403, detail="Transporter account required")
+    return current["user"]
+
+
+def require_farmer_or_transporter(current=Depends(get_current_user)):
+    """For endpoints (negotiation, chat, reviews) shared by both
+    participants of a transport request -- returns (user, role) so the
+    caller can derive identity/authorization from whichever it is."""
+    if current["role"] not in ("farmer", "transporter"):
+        raise HTTPException(status_code=403, detail="Farmer or transporter account required")
+    return current["user"], current["role"]

@@ -5,6 +5,9 @@ import { useAuth } from '../context/AuthContext'
 import LoadingSpinner from '../components/LoadingSpinner'
 import Badge from '../components/Badge'
 import { useI18n } from '../i18n/I18nContext'
+import TripReviewSection from '../components/TripReviewSection'
+import TransportQuoteSection from '../components/TransportQuoteSection'
+import { formatTimestamp } from '../utils/datetime'
 
 const STATUS_COLORS = {
   REQUESTED: 'blue',
@@ -188,11 +191,21 @@ export default function Transport() {
                 ))}
               </div>
 
+              {/* Real server timestamps for the two physical trip events that
+                  have one -- planned pickup_date/pickup_time above are what
+                  the farmer entered, these are what actually happened. */}
+              {(formatTimestamp(r.picked_up_at) || formatTimestamp(r.delivered_at)) && (
+                <p className="text-[11px] text-ink/40 dark:text-paper/40 -mt-2 mb-3">
+                  {formatTimestamp(r.picked_up_at) && `${t('transport.quote.pickedUpAt')} · ${formatTimestamp(r.picked_up_at)}`}
+                  {formatTimestamp(r.picked_up_at) && formatTimestamp(r.delivered_at) && '  ·  '}
+                  {formatTimestamp(r.delivered_at) && `${t('transport.quote.deliveredAt')} · ${formatTimestamp(r.delivered_at)}`}
+                </p>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm mb-3">
                 {r.vehicle_type && <div><p className="text-xs text-ink/50 dark:text-paper/50">{t('transport.vehicle')}</p><p className="font-semibold">{r.vehicle_type}</p></div>}
                 {r.driver_name && <div><p className="text-xs text-ink/50 dark:text-paper/50">{t('transport.driver')}</p><p className="font-semibold">{r.driver_name}</p></div>}
                 {r.driver_contact && <div><p className="text-xs text-ink/50 dark:text-paper/50">{t('transport.contact')}</p><p className="font-semibold">{r.driver_contact}</p></div>}
-                {r.estimated_cost && <div><p className="text-xs text-ink/50 dark:text-paper/50">{t('transport.estimatedCost')}</p><p className="font-semibold">₹{r.estimated_cost.toLocaleString('en-IN')}</p></div>}
                 {r.shared_transport && <div><Badge color="blue" size="sm">{t('transport.shared')}</Badge></div>}
                 {r.lot_id && <div><p className="text-xs text-ink/50 dark:text-paper/50">{t('transport.lotId')}</p><p className="font-semibold">#{r.lot_id}</p></div>}
                 {r.transaction_id && <div><p className="text-xs text-ink/50 dark:text-paper/50">{t('transport.transaction')}</p><p className="font-semibold">#{r.transaction_id}</p></div>}
@@ -212,6 +225,16 @@ export default function Transport() {
                   </button>
                 )}
               </div>
+
+              {/* Estimate -> transporter quote -> agreed price. */}
+              <TransportQuoteSection
+                trip={r}
+                onUpdated={(updated) => setRequests(reqs => reqs.map(x => x.id === updated.id ? updated : x))}
+              />
+
+              {/* Post-trip trust layer. Renders only for DELIVERED trips;
+                  the component itself returns null otherwise. */}
+              <TripReviewSection trip={r} />
             </div>
           ))}
         </div>

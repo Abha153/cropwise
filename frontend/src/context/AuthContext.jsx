@@ -38,6 +38,12 @@ export function AuthProvider({ children }) {
     return data
   }, [applySession])
 
+  const registerTransporter = useCallback(async (payload) => {
+    const data = await api.registerTransporter(payload)
+    applySession(data)
+    return data
+  }, [applySession])
+
   const logout = useCallback(() => {
     localStorage.removeItem('cropwise_token')
     localStorage.removeItem('cropwise_role')
@@ -49,7 +55,7 @@ export function AuthProvider({ children }) {
 
   const value = {
     token, role, user, isAuthenticated: !!token,
-    loginFarmer, registerFarmer, registerBuyer, logout, setUser,
+    loginFarmer, registerFarmer, registerBuyer, registerTransporter, logout, setUser,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -4,8 +4,8 @@ import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 
-const DEFAULT_SCENARIO = (label) => ({
-  label, crop: 'Tomato', quantity_kg: 2000, selling_price_per_kg: 22,
+const DEFAULT_SCENARIO = (label, labelKey = null, labelParams = {}) => ({
+  label, labelKey, labelParams, crop: 'Tomato', quantity_kg: 2000, selling_price_per_kg: 22,
   transport_cost: 100, labour_cost: 300, packaging_cost: 200, storage_cost: 0, other_cost: 0,
 })
 
@@ -21,11 +21,11 @@ function ScenarioCard({ scenario, onChange, onRemove, removable, t }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label={t('common.quantityKg')} value={scenario.quantity_kg} onChange={v => set('quantity_kg', v)} />
-        <Field label="Selling price (₹/kg)" value={scenario.selling_price_per_kg} onChange={v => set('selling_price_per_kg', v)} />
-        <Field label="Transport cost (₹)" value={scenario.transport_cost} onChange={v => set('transport_cost', v)} />
-        <Field label="Labour cost (₹)" value={scenario.labour_cost} onChange={v => set('labour_cost', v)} />
-        <Field label="Packaging cost (₹)" value={scenario.packaging_cost} onChange={v => set('packaging_cost', v)} />
-        <Field label="Storage cost (₹)" value={scenario.storage_cost} onChange={v => set('storage_cost', v)} />
+        <Field label={t('profit.sellingPrice')} value={scenario.selling_price_per_kg} onChange={v => set('selling_price_per_kg', v)} />
+        <Field label={t('profit.transportCost')} value={scenario.transport_cost} onChange={v => set('transport_cost', v)} />
+        <Field label={t('profit.labourCost')} value={scenario.labour_cost} onChange={v => set('labour_cost', v)} />
+        <Field label={t('profit.packagingCost')} value={scenario.packaging_cost} onChange={v => set('packaging_cost', v)} />
+        <Field label={t('profit.storageCost')} value={scenario.storage_cost} onChange={v => set('storage_cost', v)} />
       </div>
     </div>
   )
@@ -43,8 +43,8 @@ function Field({ label, value, onChange }) {
 export default function ProfitCalculator() {
   const { t } = useI18n()
   const [scenarios, setScenarios] = useState([
-    DEFAULT_SCENARIO('Local Mandi'),
-    { ...DEFAULT_SCENARIO('Direct Buyer'), selling_price_per_kg: 27, transport_cost: 800, packaging_cost: 250 },
+    DEFAULT_SCENARIO(t('profit.localMandi'), 'profit.localMandi'),
+    { ...DEFAULT_SCENARIO(t('profit.directBuyer'), 'profit.directBuyer'), selling_price_per_kg: 27, transport_cost: 800, packaging_cost: 250 },
   ])
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -54,11 +54,28 @@ export default function ProfitCalculator() {
     setScenarios(prev => prev.map((s, i) => i === idx ? updated : s))
   }
   function addScenario() {
-    setScenarios(prev => [...prev, DEFAULT_SCENARIO(`Option ${prev.length + 1}`)])
+    const nextIndex = scenarios.length + 1
+    setScenarios(prev => [...prev, DEFAULT_SCENARIO(t('profit.optionNumber', { number: nextIndex }), 'profit.optionNumber', { number: nextIndex })])
   }
   function removeScenario(idx) {
     setScenarios(prev => prev.filter((_, i) => i !== idx))
   }
+
+  React.useEffect(() => {
+    setScenarios(prev => prev.map((scenario, index) => {
+      if (!scenario.labelKey) return scenario
+      if (index === 0 && scenario.labelKey === 'profit.localMandi') {
+        return { ...scenario, label: t('profit.localMandi') }
+      }
+      if (index === 1 && scenario.labelKey === 'profit.directBuyer') {
+        return { ...scenario, label: t('profit.directBuyer') }
+      }
+      if (scenario.labelKey === 'profit.optionNumber') {
+        return { ...scenario, label: t('profit.optionNumber', scenario.labelParams) }
+      }
+      return scenario
+    }))
+  }, [t])
 
   async function compare() {
     setLoading(true)
@@ -75,8 +92,8 @@ export default function ProfitCalculator() {
 
   return (
     <div>
-      <h1 className="font-display text-3xl font-bold mb-1">🧮 Profit Calculator</h1>
-      <p className="text-ink/60 dark:text-paper/60 mb-6">Compare your real net profit across different selling options, side by side.</p>
+      <h1 className="font-display text-3xl font-bold mb-1">🧮 {t('profit.title')}</h1>
+      <p className="text-ink/60 dark:text-paper/60 mb-6">{t('profit.subtitle')}</p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         {scenarios.map((s, i) => (
@@ -100,7 +117,7 @@ export default function ProfitCalculator() {
             <div key={s.label} className={`rounded-2xl p-5 shadow-card border ${s.is_best ? 'bg-forest text-paper border-forest' : 'bg-white dark:bg-white/5 border-black/5 dark:border-white/10'}`}>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-display font-semibold text-lg">{s.label}</h3>
-                {s.is_best && <Badge tone="marigold">🏆 Best option</Badge>}
+                {s.is_best && <Badge tone="marigold">🏆 {t('profit.bestOption')}</Badge>}
               </div>
               <div className={`text-3xl font-mono-data font-bold mb-3 ${s.is_best ? '' : 'text-forest'}`}>₹{s.net_profit.toLocaleString()}</div>
               <div className="grid grid-cols-2 gap-2 text-sm">

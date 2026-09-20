@@ -272,7 +272,7 @@ export default function Landing() {
       </section>
 
       <footer className="px-6 md:px-10 py-8 text-center text-xs text-ink/40 dark:text-paper/40 font-mono-data">
-        CropWise -- built for the Strengthening Market Linkages and Price Discovery for Farmers hackathon track. Demo data only.
+        {t('landing.footerNote')}
       </footer>
     </div>
   )

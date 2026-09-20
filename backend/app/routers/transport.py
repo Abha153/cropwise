@@ -5,10 +5,11 @@ Upgrades FarmPool calculator into a real coordination workflow.
 import datetime as dt
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.errors import AppError
 from app import models, schemas
 from app.auth_utils import require_farmer
 from app.routers.transactions import _add_event, _normalize_status
@@ -48,7 +49,7 @@ def create_transport_request(
     if lot_id:
         lot = db.query(models.Lot).filter(models.Lot.id == lot_id, models.Lot.farmer_id == farmer.id).first()
         if not lot:
-            raise HTTPException(status_code=404, detail="Lot not found or not yours")
+            raise AppError(status_code=404, code="LOT_NOT_FOUND_OR_NOT_YOURS", detail="Lot not found or not yours")
 
     # Validate + link the transaction this transport request fulfils, so
     # transport progress can drive the transaction lifecycle instead of the
@@ -58,7 +59,7 @@ def create_transport_request(
     if transaction_id:
         txn = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
         if not txn or txn.farmer_id != farmer.id:
-            raise HTTPException(status_code=404, detail="Transaction not found or not yours")
+            raise AppError(status_code=404, code="TRANSACTION_NOT_FOUND_OR_NOT_YOURS", detail="Transaction not found or not yours")
 
     req = models.TransportRequest(
         lot_id=lot_id,
@@ -133,7 +134,7 @@ def get_request(
 ):
     r = db.query(models.TransportRequest).filter(models.TransportRequest.id == request_id).first()
     if not r or r.farmer_id != farmer.id:
-        raise HTTPException(status_code=404, detail="Transport request not found")
+        raise AppError(status_code=404, code="TRANSPORT_REQUEST_NOT_FOUND", detail="Transport request not found")
     return _request_dict(r)
 
 
@@ -148,16 +149,21 @@ def update_status(
 ):
     r = db.query(models.TransportRequest).filter(models.TransportRequest.id == request_id).first()
     if not r or r.farmer_id != farmer.id:
-        raise HTTPException(status_code=404, detail="Transport request not found")
+        raise AppError(status_code=404, code="TRANSPORT_REQUEST_NOT_FOUND", detail="Transport request not found")
 
     new_status = (payload.status or "").upper()
     if new_status not in VALID_TRANSITIONS.get(r.status, []):
-        raise HTTPException(
+        raise AppError(
             status_code=400,
+            code="INVALID_STATUS_TRANSITION",
             detail=f"Cannot transition from {r.status} to {new_status}. "
                    f"Valid transitions: {VALID_TRANSITIONS.get(r.status, [])}",
         )
     r.status = new_status
+    if new_status == "PICKED_UP":
+        r.picked_up_at = dt.datetime.utcnow()
+    if new_status == "DELIVERED":
+        r.delivered_at = dt.datetime.utcnow()
     if payload.driver_name:
         r.driver_name = payload.driver_name
     if payload.driver_contact:
@@ -202,6 +208,109 @@ def update_status(
     return _request_dict(r)
 
 
+# ─── transporter quote / negotiation / agreed price ───────────────────────────
+#
+# See the note on TransportRequest.quote_status in models.py: there is no
+# transporter login in this codebase, so the quote is recorded by the
+# farmer who owns the request (the same person who already enters
+# driver_name/driver_contact). Only that farmer can submit/counter/accept/
+# reject it -- reusing the exact ownership check every other endpoint in
+# this router already uses, not a new authorization system.
+
+QUOTE_VALID_FROM = {
+    "submit_quote":   ("AWAITING_QUOTE", "QUOTED", "COUNTERED"),
+    "counter_offer":  ("QUOTED",),
+    "accept":         ("QUOTED",),
+    "reject":         ("QUOTED",),
+}
+
+
+def _load_owned_request(request_id: int, farmer: models.Farmer, db: Session) -> models.TransportRequest:
+    r = db.query(models.TransportRequest).filter(models.TransportRequest.id == request_id).first()
+    if not r or r.farmer_id != farmer.id:
+        raise AppError(status_code=404, code="TRANSPORT_REQUEST_NOT_FOUND", detail="Transport request not found")
+    if r.status in ("DELIVERED", "CANCELLED"):
+        raise AppError(status_code=400, code="TRIP_ALREADY_PAST_QUOTING", detail=f"Trip is already {r.status}; quote can no longer change")
+    return r
+
+
+@router.post("/requests/{request_id}/quote")
+def submit_quote(
+    request_id: int,
+    payload: schemas.TransportQuoteSubmit,
+    farmer: models.Farmer = Depends(require_farmer),
+    db: Session = Depends(get_db),
+):
+    """Record the price the transporter actually quoted (not CropWise's estimate)."""
+    r = _load_owned_request(request_id, farmer, db)
+    if r.quote_status not in QUOTE_VALID_FROM["submit_quote"]:
+        raise AppError(status_code=400, code="INVALID_QUOTE_STATUS_FOR_SUBMIT", detail=f"Cannot submit a quote while quote_status is {r.quote_status}")
+    r.quoted_price = payload.quoted_price
+    r.quoted_at = dt.datetime.utcnow()
+    r.quote_status = "QUOTED"
+    db.commit()
+    db.refresh(r)
+    return _request_dict(r)
+
+
+@router.post("/requests/{request_id}/quote/counter-offer")
+def counter_offer(
+    request_id: int,
+    payload: schemas.TransportCounterOffer,
+    farmer: models.Farmer = Depends(require_farmer),
+    db: Session = Depends(get_db),
+):
+    """One lightweight counter round: farmer proposes a different price.
+    A revised quote (via submit_quote) moves it back to QUOTED so the
+    farmer can accept/reject/counter again. Not real-time chat -- just a
+    single stored proposal at a time."""
+    r = _load_owned_request(request_id, farmer, db)
+    if r.quote_status not in QUOTE_VALID_FROM["counter_offer"]:
+        raise AppError(status_code=400, code="INVALID_QUOTE_STATUS_FOR_COUNTER", detail=f"Cannot counter-offer while quote_status is {r.quote_status}")
+    r.counter_price = payload.counter_price
+    r.counter_by = "farmer"
+    r.counter_at = dt.datetime.utcnow()
+    r.quote_status = "COUNTERED"
+    db.commit()
+    db.refresh(r)
+    return _request_dict(r)
+
+
+@router.post("/requests/{request_id}/quote/accept")
+def accept_quote(
+    request_id: int,
+    farmer: models.Farmer = Depends(require_farmer),
+    db: Session = Depends(get_db),
+):
+    """Farmer accepts the current quoted_price. The agreed price is computed
+    and stored server-side from r.quoted_price -- never trusted from the
+    request body, so the frontend cannot submit a different number."""
+    r = _load_owned_request(request_id, farmer, db)
+    if r.quote_status not in QUOTE_VALID_FROM["accept"]:
+        raise AppError(status_code=400, code="INVALID_QUOTE_STATUS_FOR_ACCEPT", detail=f"Cannot accept while quote_status is {r.quote_status}")
+    r.agreed_price = r.quoted_price
+    r.agreed_at = dt.datetime.utcnow()
+    r.quote_status = "ACCEPTED"
+    db.commit()
+    db.refresh(r)
+    return _request_dict(r)
+
+
+@router.post("/requests/{request_id}/quote/reject")
+def reject_quote(
+    request_id: int,
+    farmer: models.Farmer = Depends(require_farmer),
+    db: Session = Depends(get_db),
+):
+    r = _load_owned_request(request_id, farmer, db)
+    if r.quote_status not in QUOTE_VALID_FROM["reject"]:
+        raise AppError(status_code=400, code="INVALID_QUOTE_STATUS_FOR_REJECT", detail=f"Cannot reject while quote_status is {r.quote_status}")
+    r.quote_status = "REJECTED"
+    db.commit()
+    db.refresh(r)
+    return _request_dict(r)
+
+
 # ─── cancel ──────────────────────────────────────────────────────────────────
 
 @router.patch("/requests/{request_id}/cancel")
@@ -212,9 +321,9 @@ def cancel_request(
 ):
     r = db.query(models.TransportRequest).filter(models.TransportRequest.id == request_id).first()
     if not r or r.farmer_id != farmer.id:
-        raise HTTPException(status_code=404, detail="Transport request not found")
+        raise AppError(status_code=404, code="TRANSPORT_REQUEST_NOT_FOUND", detail="Transport request not found")
     if r.status in ("DELIVERED", "CANCELLED"):
-        raise HTTPException(status_code=400, detail=f"Cannot cancel a request in status {r.status}")
+        raise AppError(status_code=400, code="TRANSPORT_REQUEST_NOT_CANCELLABLE", detail=f"Cannot cancel a request in status {r.status}")
     r.status = "CANCELLED"
     db.commit()
     return {"cancelled": True}
@@ -252,8 +361,39 @@ def _request_dict(r: models.TransportRequest) -> dict:
         "shared_transport": r.shared_transport,
         "status": r.status,
         "status_label": _status_label(r.status),
+        "picked_up_at": r.picked_up_at.isoformat() if r.picked_up_at else None,
+        "delivered_at": r.delivered_at.isoformat() if r.delivered_at else None,
+        # Quote / negotiation / agreed price -- see models.py for why this
+        # is recorded by the farmer rather than a separate transporter login.
+        "quote_status": r.quote_status,
+        "quoted_price": r.quoted_price,
+        "quoted_at": r.quoted_at.isoformat() if r.quoted_at else None,
+        "counter_price": r.counter_price,
+        "counter_by": r.counter_by,
+        "counter_at": r.counter_at.isoformat() if r.counter_at else None,
+        "agreed_price": r.agreed_price,
+        "agreed_at": r.agreed_at.isoformat() if r.agreed_at else None,
+        # Real authenticated Transporter <-> Farmer workflow (separate
+        # state machine from the legacy quote_status fields above -- see
+        # models.py). transporter is only a lightweight public summary,
+        # never the transporter's password hash or email.
+        "transporter_id": r.transporter_id,
+        "transporter": _transporter_summary(r.transporter) if r.transporter else None,
+        "negotiation_status": r.negotiation_status,
+        "claimed_at": r.claimed_at.isoformat() if r.claimed_at else None,
+        "transporter_agreed_price": r.transporter_agreed_price,
+        "transporter_agreed_at": r.transporter_agreed_at.isoformat() if r.transporter_agreed_at else None,
+        "completed_at": r.completed_at.isoformat() if r.completed_at else None,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
+def _transporter_summary(t: "models.Transporter") -> dict:
+    return {
+        "id": t.id, "name": t.name, "phone": t.phone,
+        "business_name": t.business_name, "vehicle_types": t.vehicle_types,
+        "rating": t.rating, "rating_count": t.rating_count,
     }
 
 

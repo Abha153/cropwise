@@ -64,7 +64,34 @@ export const api = {
   },
   registerFarmer: (payload) => request('/auth/register/farmer', { method: 'POST', body: payload }),
   registerBuyer: (payload) => request('/auth/register/buyer', { method: 'POST', body: payload }),
+  registerTransporter: (payload) => request('/auth/register/transporter', { method: 'POST', body: payload }),
   me: () => request('/auth/me', { auth: true }),
+
+  // Transporter dashboard
+  transporterAvailableRequests: () => request('/transporter/requests/available', { auth: true }),
+  transporterMyRequests: () => request('/transporter/requests/mine', { auth: true }),
+  transporterClaimRequest: (id) => request(`/transporter/requests/${id}/claim`, { method: 'POST', auth: true }),
+  transporterRequestDetail: (id) => request(`/transporter/requests/${id}`, { auth: true }),
+  transporterProfile: () => request('/transporter/profile', { auth: true }),
+  updateTransporterProfile: (payload) => request('/transporter/profile', { method: 'PATCH', body: payload, auth: true }),
+
+  // Negotiation -- shared endpoints, identity/role comes from the JWT so the
+  // same calls work for the farmer's side and the transporter's side.
+  listTransportOffers: (requestId) => request(`/transport/requests/${requestId}/offers`, { auth: true }),
+  makeTransportOffer: (requestId, payload) =>
+    request(`/transport/requests/${requestId}/offers`, { method: 'POST', body: payload, auth: true }),
+  acceptTransportOffer: (requestId, offerId) =>
+    request(`/transport/requests/${requestId}/offers/${offerId}/accept`, { method: 'POST', auth: true }),
+  rejectTransportOffer: (requestId, offerId) =>
+    request(`/transport/requests/${requestId}/offers/${offerId}/reject`, { method: 'POST', auth: true }),
+  listTransportMessages: (requestId) => request(`/transport/requests/${requestId}/messages`, { auth: true }),
+  sendTransportMessage: (requestId, message) =>
+    request(`/transport/requests/${requestId}/messages`, { method: 'POST', body: { message }, auth: true }),
+  updateTransportStatus: (requestId, status) =>
+    request(`/transport/requests/${requestId}/transporter-status`, { method: 'POST', body: { status }, auth: true }),
+  submitTransportReview: (requestId, payload) =>
+    request(`/transport/requests/${requestId}/review`, { method: 'POST', body: payload, auth: true }),
+  listTransportReviews: (requestId) => request(`/transport/requests/${requestId}/reviews`, { auth: true }),
 
   // Market
   getCrops: () => request('/market/crops'),
@@ -185,6 +212,7 @@ export const api = {
   submitVerification: (payload) => request('/buyer-verification', { method: 'POST', body: payload, auth: true }),
   myVerification: () => request('/buyer-verification/me', { auth: true }),
   getBuyerVerification: (buyerId) => request(`/buyer-verification/${buyerId}`),
+  getBuyerVerificationBadge: (buyerId) => request(`/buyer-verification/${buyerId}/badge`),
   adminListVerifications: (status = 'UNDER_REVIEW') => request(`/buyer-verification?status=${status}`, { auth: true }),
   adminApproveVerification: (buyerId, notes = '') => request(`/buyer-verification/${buyerId}/approve?notes=${encodeURIComponent(notes)}`, { method: 'PATCH', auth: true }),
   adminRejectVerification: (buyerId, reason) => request(`/buyer-verification/${buyerId}/reject?reason=${encodeURIComponent(reason)}`, { method: 'PATCH', auth: true }),
@@ -200,13 +228,28 @@ export const api = {
   myPayments: () => request('/payments/mine', { auth: true }),
   paymentForTransaction: (txnId) => request(`/payments/transaction/${txnId}`, { auth: true }),
   createPayment: (payload) => request('/payments', { method: 'POST', body: payload, auth: true }),
-  createRazorpayOrder: (payload) => request('/payments/create-order', { method: 'POST', body: payload, auth: true }),
-  verifyRazorpayPayment: (id, payload) => request(`/payments/${id}/verify`, { method: 'POST', body: payload, auth: true }),
-  cancelRazorpayPayment: (id) => request(`/payments/${id}/cancel`, { method: 'POST', auth: true }),
-  failRazorpayPayment: (id) => request(`/payments/${id}/failed`, { method: 'POST', auth: true }),
   initiatePayment: (id, method = 'UPI') => request(`/payments/${id}/initiate?payment_method=${encodeURIComponent(method)}`, { method: 'PATCH', auth: true }),
   confirmPaymentReceived: (id) => request(`/payments/${id}/confirm-received`, { method: 'PATCH', auth: true }),
   completeTransaction: (id) => request(`/payments/${id}/complete-transaction`, { method: 'PATCH', auth: true }),
+  generateReceipt: (txnId) => request(`/receipts/transaction/${txnId}`, { method: 'POST', auth: true }),
+  receiptForTransaction: (txnId) => request(`/receipts/transaction/${txnId}`, { auth: true }),
+  verifyReceipt: (receiptId) => request(`/receipts/${receiptId}/verify`, { auth: true }),
+  // Not run through request(): the endpoint returns a plain-text document
+  // (Content-Disposition: attachment), not JSON, so request()'s res.json()
+  // would fail on it. Fetches the raw text with the same auth header and
+  // hands it back for the caller to save as a file client-side.
+  downloadReceipt: async (receiptId) => {
+    const token = getToken()
+    const headers = {}
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${API_BASE_URL}/receipts/${receiptId}/download`, { headers })
+    if (!res.ok) {
+      let detail = `Download failed (${res.status})`
+      try { detail = (await res.json()).detail || detail } catch (e) {}
+      throw new Error(detail)
+    }
+    return res.text()
+  },
 
   // Grievances (Phase 13)
   raiseGrievance: (payload) => request('/grievances', { method: 'POST', body: payload, auth: true }),
@@ -230,7 +273,20 @@ export const api = {
   getTransportRequest: (id) => request(`/transport/requests/${id}`, { auth: true }),
   updateTransportStatus: (id, status, extra = {}) => request(`/transport/requests/${id}/status`, { method: 'PATCH', body: { status, ...extra }, auth: true }),
   cancelTransportRequest: (id) => request(`/transport/requests/${id}/cancel`, { method: 'PATCH', auth: true }),
+  submitTransportQuote: (id, quotedPrice) => request(`/transport/requests/${id}/quote`, { method: 'POST', body: { quoted_price: quotedPrice }, auth: true }),
+  counterTransportOffer: (id, counterPrice) => request(`/transport/requests/${id}/quote/counter-offer`, { method: 'POST', body: { counter_price: counterPrice }, auth: true }),
+  acceptTransportQuote: (id) => request(`/transport/requests/${id}/quote/accept`, { method: 'POST', auth: true }),
+  rejectTransportQuote: (id) => request(`/transport/requests/${id}/quote/reject`, { method: 'POST', auth: true }),
   getVehicleOptions: (quantityKg) => request(`/transport/vehicle-options${quantityKg ? `?quantity_kg=${quantityKg}` : ''}`),
+
+  // Trip reviews (FarmPool / shared-logistics trust layer).
+  // Distinct from the farmer<->buyer `ratings` endpoints above: these
+  // attach to a TransportRequest and cover the transporter, the shared
+  // journey, and the FPO/pool. Eligibility and the `verified` flag are
+  // decided server-side -- the client never sends them.
+  submitTripReview: (payload) => request('/trip-reviews', { method: 'POST', body: payload, auth: true }),
+  tripReviewsForTrip: (transportRequestId) => request(`/trip-reviews/for-trip/${transportRequestId}`),
+  myTripReviews: (transportRequestId) => request(`/trip-reviews/my/${transportRequestId}`, { auth: true }),
 
   // Ratings (Phase 14)
   rateAsBuyer: (payload) => request('/ratings/buyer-rates-farmer', { method: 'POST', body: payload, auth: true }),

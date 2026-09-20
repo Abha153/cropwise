@@ -1,0 +1,10 @@
+﻿python :   File "<string>", line 12
+At line:3 char:1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  File "<string>", line 12:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    print(f'{f}: {len(d)} keys, [{" ENGLISH\
+                                  ^
+SyntaxError: unterminated string literal (detected at line 12)

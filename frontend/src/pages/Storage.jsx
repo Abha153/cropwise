@@ -14,6 +14,25 @@ const TYPE_KEYS = {
   GOVERNMENT_STORAGE: 'storage.type.GOVERNMENT_STORAGE',
 }
 
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Wheat: 'auth.crop.wheat',
+  Potato: 'auth.crop.potato',
+  Onion: 'auth.crop.onion',
+  Soybean: 'auth.crop.soybean',
+  Maize: 'auth.crop.maize',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  if (!name) return name
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
+
 const TYPE_COLORS = {
   WAREHOUSE: 'blue',
   COLD_STORAGE: 'purple',
@@ -168,7 +187,7 @@ export default function Storage() {
               <select value={cropFilter} onChange={e => setCropFilter(e.target.value)}
                 className="border border-black/10 dark:border-white/15 rounded-lg px-3 py-2 text-sm bg-white dark:bg-white/5 dark:text-paper">
                 <option value="">{t('storage.allCrops')}</option>
-                {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
+                {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {getLocalizedCropName(c.name, t)}</option>)}
               </select>
             </div>
             <div>
@@ -243,7 +262,7 @@ export default function Storage() {
                   {f.crop_types?.length > 0 && (
                     <div className="flex flex-wrap gap-1 mb-3">
                       {f.crop_types.slice(0, 4).map(c => (
-                        <span key={c} className="text-xs bg-forest/10 text-forest px-2 py-0.5 rounded-full">{c}</span>
+                        <span key={c} className="text-xs bg-forest/10 text-forest px-2 py-0.5 rounded-full">{getLocalizedCropName(c, t)}</span>
                       ))}
                       {f.crop_types.length > 4 && <span className="text-xs text-ink/40">+{f.crop_types.length - 4}</span>}
                     </div>

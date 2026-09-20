@@ -14,6 +14,25 @@ const CROPS = [
   'Soybean', 'Chana (Gram)', 'Groundnut', 'Mustard'
 ]
 
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  Onion: 'auth.crop.onion',
+  Potato: 'auth.crop.potato',
+  Wheat: 'auth.crop.wheat',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Maize: 'auth.crop.maize',
+  Soybean: 'auth.crop.soybean',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
+
 const STATUS_TONE = {
   AVAILABLE: 'success', DRAFT: 'neutral', UNDER_OFFER: 'info',
   SOLD: 'forest', IN_TRANSIT: 'info', DELIVERED: 'success',
@@ -27,7 +46,7 @@ function LotCard({ lot, role, onCancel }) {
       <div className="flex items-start justify-between mb-3 gap-2 flex-wrap">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-display font-bold text-lg">{lot.crop}</span>
+            <span className="font-display font-bold text-lg">{getLocalizedCropName(lot.crop, t)}</span>
             <Badge tone={STATUS_TONE[lot.status] || 'neutral'}>{t(`lots.status.${lot.status}`)}</Badge>
           </div>
           <div className="text-xs text-ink/50 dark:text-paper/50 mt-0.5">
@@ -155,7 +174,7 @@ function CreateLotForm({ onCreated, onClose }) {
         <div>
           <label className={lbl}>{t('common.crop')}</label>
           <select value={form.crop} onChange={set('crop')} className={inp}>
-            {CROPS.map(c => <option key={c}>{c}</option>)}
+            {CROPS.map(c => <option key={c}>{getLocalizedCropName(c, t)}</option>)}
           </select>
         </div>
         <div>
@@ -164,7 +183,7 @@ function CreateLotForm({ onCreated, onClose }) {
         </div>
         <div>
           <label className={lbl}>{t('lots.expectedPriceQuintal')}</label>
-          <input type="number" min="1" value={form.expected_price} onChange={set('expected_price')} className={inp} placeholder="e.g. 2800" required />
+          <input type="number" min="1" value={form.expected_price} onChange={set('expected_price')} className={inp} placeholder={t('lots.examplePrice')} required />
         </div>
         <div>
           <label className={lbl}>{t('lots.minPriceQuintal')}</label>
@@ -196,7 +215,7 @@ function CreateLotForm({ onCreated, onClose }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={lbl}>{t('common.location')}</label>
-          <input value={form.location} onChange={set('location')} className={inp} placeholder="e.g. Bilaspur" />
+          <input value={form.location} onChange={set('location')} className={inp} placeholder={t('lots.exampleLocation')} />
         </div>
         <div>
           <label className={lbl}>{t('lots.noteOptional')}</label>

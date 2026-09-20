@@ -179,9 +179,18 @@ def ask(payload: schemas.AssistantAsk, db: Session = Depends(get_db)):
         if not demands:
             text = with_fallback_note(render_buyer_search_none(effective_language, crop_display))
             return {**base_response, "answer": text}
+        # Real verification status per buyer -- never invented. Same mapping
+        # used by marketplace badges (app/routers/buyer_verification.py).
+        from app.routers.buyer_verification import display_info as _verification_display_info
+        buyer_ids = {d.buyer_id for d in demands if d.buyer}
+        verifications = {
+            v.buyer_id: v for v in db.query(models.BuyerVerification)
+            .filter(models.BuyerVerification.buyer_id.in_(buyer_ids)).all()
+        }
         buyer_list = ", ".join(
             f"{d.buyer.company_name} ({d.required_quantity_kg:.0f} kg"
             + (f", {d.delivery_location}" if d.delivery_location else "") + ")"
+            + f" [{_verification_display_info(verifications.get(d.buyer_id)).get('label')}]"
             for d in demands if d.buyer
         )
         text = with_fallback_note(render_buyer_search_found(

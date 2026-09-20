@@ -196,7 +196,25 @@ def find_nearby_pool_partners(crop: str, location: str, quantity_kg: float):
     return partners
 
 
-def shared_transport_plan(crop: str, location: str, quantity_kg: float, destination_market: str):
+def shared_transport_plan(crop: str, location: str, quantity_kg: float, destination_market: str,
+                           agreed_transport_price: float = None):
+    """Compute the FarmPool shared-cost allocation.
+
+    `agreed_transport_price` is OPTIONAL and, when provided, must be the
+    real server-side `TransportRequest.transporter_agreed_price` (see
+    app/models.py) -- i.e. an actual negotiated price a transporter has
+    agreed to for the pooled trip, never a client-supplied number. When
+    given, the pool's shared cost is allocated from that real price
+    instead of the transport_optimizer estimate below. The estimate
+    (`shared_total_cost`/`your_shared_transport_cost` basis) is still
+    computed either way and never silently discarded -- callers that want
+    to show "what we estimated" alongside "what was actually agreed" can
+    use `estimated_shared_transport_cost` and `cost_basis`.
+
+    Flow this implements (see backend/HANDOFF.md / MVP_AUDIT.md):
+        estimated_cost -> transporter quote -> negotiation ->
+        agreed_price -> FarmPool cost allocation (this function)
+    """
     distance = distance_between(location, destination_market)
     partners = find_nearby_pool_partners(crop, location, quantity_kg)
 
@@ -218,12 +236,26 @@ def shared_transport_plan(crop: str, location: str, quantity_kg: float, destinat
     maintenance_cost = round_trip_km * maint_per_km * SHARED_RATE_DISCOUNT
     overhead_cost = round_trip_km * overhead_per_km * SHARED_RATE_DISCOUNT
     toll_cost = max(distance - TOLL_FREE_RADIUS_KM, 0) * TOLL_RATE_PER_KM
-    shared_total_cost = max(fuel_cost + driver_cost + maintenance_cost + overhead_cost + toll_cost,
-                             MINIMUM_TRIP_CHARGE)
+    estimated_shared_total_cost = max(fuel_cost + driver_cost + maintenance_cost + overhead_cost + toll_cost,
+                                       MINIMUM_TRIP_CHARGE)
 
-    my_share = shared_total_cost * (quantity_kg / total_pool_quantity) if total_pool_quantity else shared_total_cost
+    # ALLOCATION RULE (pre-existing, reused as-is): each participant pays
+    # in proportion to their share of the pooled quantity. Before a
+    # transporter agreement exists this is applied to the ESTIMATE; once a
+    # real agreed price exists, the identical rule is applied to that real
+    # price instead -- the rule doesn't change, only which total it's
+    # applied to.
+    has_agreed_price = agreed_transport_price is not None
+    allocation_basis_total = float(agreed_transport_price) if has_agreed_price else estimated_shared_total_cost
+
+    my_share = (allocation_basis_total * (quantity_kg / total_pool_quantity)
+                if total_pool_quantity else allocation_basis_total)
     my_share = round(my_share, 2)
     savings = round(my_individual_cost - my_share, 2)
+
+    estimated_my_share = (estimated_shared_total_cost * (quantity_kg / total_pool_quantity)
+                           if total_pool_quantity else estimated_shared_total_cost)
+    estimated_my_share = round(estimated_my_share, 2)
 
     return {
         "destination_market": destination_market,
@@ -242,8 +274,23 @@ def shared_transport_plan(crop: str, location: str, quantity_kg: float, destinat
         "total_pool_quantity_kg": round(total_pool_quantity, 1),
         "vehicle_category": vehicle_label,
         "your_individual_transport_cost": my_individual_cost,
+        # Real transport-optimizer ESTIMATE for the pooled trip and this
+        # farmer's estimated share of it -- always present, never
+        # overwritten by an agreed price, so the UI can always show
+        # "what we estimated" even after a real price is agreed.
+        "estimated_shared_transport_cost": estimated_shared_total_cost,
+        "your_estimated_shared_share": estimated_my_share,
+        # The amount this farmer actually owes under the current basis
+        # (agreed price if one exists, otherwise the estimate -- kept as
+        # `your_shared_transport_cost` for backward compatibility with
+        # existing frontend/tests).
         "your_shared_transport_cost": my_share,
         "estimated_savings": max(savings, 0),
         "savings_pct": round((savings / my_individual_cost) * 100, 1) if my_individual_cost else 0,
-        "label": "ESTIMATED",
+        # AGREED once a real transporter_agreed_price was supplied and used
+        # as the allocation basis; ESTIMATED otherwise. Frontend/Assistant
+        # must never present ESTIMATED figures as if they were AGREED.
+        "cost_basis": "AGREED" if has_agreed_price else "ESTIMATED",
+        "transporter_agreed_price": round(float(agreed_transport_price), 2) if has_agreed_price else None,
+        "label": "AGREED" if has_agreed_price else "ESTIMATED",
     }

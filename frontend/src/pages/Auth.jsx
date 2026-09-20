@@ -1,27 +1,48 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Leaf, Sprout, Building2, ShieldCheck, ArrowRight } from 'lucide-react'
+import { Leaf, Sprout, Building2, Truck, ShieldCheck, ArrowRight } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
 import { useI18n } from '../i18n/I18nContext'
 import { DEFAULT_DEMO_LOCATION } from '../utils/location'
 
-const DEMO_ACCOUNTS = [
-  { label: 'Ramesh Kumar (Farmer, Bilaspur)', email: 'ramesh@cropwise.demo', role: 'farmer' },
-  { label: 'Sunita Verma (Farmer, Raigarh)', email: 'sunita@cropwise.demo', role: 'farmer' },
-  { label: 'FreshFoods Processing (Buyer)', email: 'freshfoods@cropwise.demo', role: 'buyer' },
-  { label: 'GreenBasket Retail (Buyer)', email: 'greenbasket@cropwise.demo', role: 'buyer' },
+const CROP_OPTIONS = [
+  { value: 'Tomato', key: 'auth.crop.tomato' },
+  { value: 'Paddy (Rice)', key: 'auth.crop.paddyRice' },
+  { value: 'Wheat', key: 'auth.crop.wheat' },
+  { value: 'Potato', key: 'auth.crop.potato' },
+  { value: 'Onion', key: 'auth.crop.onion' },
+  { value: 'Soybean', key: 'auth.crop.soybean' },
+  { value: 'Maize', key: 'auth.crop.maize' },
+  { value: 'Chana (Gram)', key: 'auth.crop.chanaGram' },
+  { value: 'Groundnut', key: 'auth.crop.groundnut' },
+  { value: 'Sugarcane', key: 'auth.crop.sugarcane' },
 ]
 
-const CROP_OPTIONS = ['Tomato', 'Paddy (Rice)', 'Wheat', 'Potato', 'Onion', 'Soybean', 'Maize', 'Chana (Gram)', 'Groundnut', 'Sugarcane']
+const VEHICLE_TYPE_OPTIONS = [
+  { value: 'mini-truck', key: 'auth.vehicleType.miniTruck' },
+  { value: 'truck', key: 'auth.vehicleType.truck' },
+  { value: 'tempo', key: 'auth.vehicleType.tempo' },
+  { value: 'tractor-trolley', key: 'auth.vehicleType.tractorTrolley' },
+]
+
+function getDemoAccounts(t) {
+  return [
+    { label: t('auth.demoAccountRamesh'), email: 'ramesh@cropwise.demo', role: 'farmer' },
+    { label: t('auth.demoAccountSunita'), email: 'sunita@cropwise.demo', role: 'farmer' },
+    { label: t('auth.demoAccountFreshFoods'), email: 'freshfoods@cropwise.demo', role: 'buyer' },
+    { label: t('auth.demoAccountGreenBasket'), email: 'greenbasket@cropwise.demo', role: 'buyer' },
+  ]
+}
 
 export default function Auth({ mode = 'login' }) {
   const [tab, setTab] = useState(mode)
   const [userType, setUserType] = useState('farmer')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const { loginFarmer, registerFarmer, registerBuyer } = useAuth()
+  const { loginFarmer, registerFarmer, registerBuyer, registerTransporter } = useAuth()
   const { code: uiLanguage, t } = useI18n()
+  const demoAccounts = getDemoAccounts(t)
   const navigate = useNavigate()
 
   const [email, setEmail] = useState('')
@@ -31,9 +52,11 @@ export default function Auth({ mode = 'login' }) {
   const [phone, setPhone] = useState('')
   const [crops, setCrops] = useState([])
   const [buyerType, setBuyerType] = useState('wholesaler')
+  const [serviceArea, setServiceArea] = useState('')
+  const [vehicleTypes, setVehicleTypes] = useState([])
 
   async function afterLogin(role) {
-    navigate(role === 'buyer' ? '/buyer/dashboard' : '/farmer/dashboard')
+    navigate(role === 'buyer' ? '/buyer/dashboard' : role === 'transporter' ? '/transporter/dashboard' : '/farmer/dashboard')
   }
 
   async function handleLogin(e) {
@@ -58,6 +81,9 @@ export default function Auth({ mode = 'login' }) {
       if (userType === 'farmer') {
         const data = await registerFarmer({ name, email, password, location, phone, crops, preferred_language: uiLanguage })
         await afterLogin(data.role)
+      } else if (userType === 'transporter') {
+        const data = await registerTransporter({ name, email, password, phone, service_area: serviceArea, vehicle_types: vehicleTypes, preferred_language: uiLanguage })
+        await afterLogin(data.role)
       } else {
         const data = await registerBuyer({ company_name: name, email, password, location, phone, buyer_type: buyerType, crops_of_interest: crops, preferred_language: uiLanguage })
         await afterLogin(data.role)
@@ -71,6 +97,10 @@ export default function Auth({ mode = 'login' }) {
 
   function toggleCrop(c) {
     setCrops(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
+  }
+
+  function getVehicleTypeLabel(value) {
+    return t(VEHICLE_TYPE_OPTIONS.find(option => option.value === value)?.key || 'auth.vehicleType.truck')
   }
 
   async function quickDemoLogin(demoEmail) {
@@ -140,6 +170,9 @@ export default function Auth({ mode = 'login' }) {
               <button onClick={() => setUserType('buyer')} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${userType === 'buyer' ? 'border-rain bg-rain/10 text-rain' : 'border-black/10 text-ink/60'}`}>
                 <span className="inline-flex items-center gap-2"><Building2 size={14} />{t('auth.buyer')}</span>
               </button>
+              <button onClick={() => setUserType('transporter')} className={`flex-1 py-2 rounded-lg text-sm font-medium border ${userType === 'transporter' ? 'border-forest bg-forest/10 text-forest' : 'border-black/10 text-ink/60'}`}>
+                <span className="inline-flex items-center gap-2"><Truck size={14} />{t('auth.transporter')}</span>
+              </button>
             </div>
           )}
 
@@ -162,7 +195,7 @@ export default function Auth({ mode = 'login' }) {
           ) : (
             <form onSubmit={handleRegister} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{userType === 'farmer' ? t('auth.fullName') : t('auth.companyName')}</label>
+                <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{userType === 'farmer' ? t('auth.fullName') : userType === 'transporter' ? t('auth.fullName') : t('auth.companyName')}</label>
                 <input required value={name} onChange={e => setName(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" />
               </div>
               <div>
@@ -173,16 +206,41 @@ export default function Auth({ mode = 'login' }) {
                 <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.password')}</label>
                 <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('common.location')}</label>
-                  <input required value={location} onChange={e => setLocation(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" placeholder={t('auth.locationPlaceholder')} />
+              {userType === 'transporter' ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.serviceArea')}</label>
+                      <input value={serviceArea} onChange={e => setServiceArea(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" placeholder={t('auth.serviceAreaPlaceholder')} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.phone')}</label>
+                      <input value={phone} onChange={e => setPhone(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" placeholder={t('auth.phonePlaceholder')} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.vehicleTypes')}</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {VEHICLE_TYPE_OPTIONS.map(option => (
+                        <button type="button" key={option.value} onClick={() => setVehicleTypes(prev => prev.includes(option.value) ? prev.filter(x => x !== option.value) : [...prev, option.value])} className={`text-xs px-2.5 py-1.5 rounded-full border ${vehicleTypes.includes(option.value) ? 'bg-forest text-paper border-forest' : 'border-black/10 dark:border-white/15 text-ink/60 dark:text-paper/60'}`}>
+                          {t(option.key)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('common.location')}</label>
+                    <input required value={location} onChange={e => setLocation(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" placeholder={t('auth.locationPlaceholder')} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.phone')}</label>
+                    <input value={phone} onChange={e => setPhone(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" placeholder={t('auth.phonePlaceholder')} />
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.phone')}</label>
-                  <input value={phone} onChange={e => setPhone(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest/30 bg-white dark:bg-white/5 dark:text-paper" placeholder={t('auth.phonePlaceholder')} />
-                </div>
-              </div>
+              )}
               {userType === 'buyer' && (
                 <div>
                   <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('auth.buyerType')}</label>
@@ -195,16 +253,18 @@ export default function Auth({ mode = 'login' }) {
                   </select>
                 </div>
               )}
-              <div>
-                <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{userType === 'farmer' ? t('auth.cropsYouGrow') : t('auth.cropsYouBuy')}</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {CROP_OPTIONS.map(c => (
-                    <button type="button" key={c} onClick={() => toggleCrop(c)} className={`text-xs px-2.5 py-1.5 rounded-full border ${crops.includes(c) ? 'bg-forest text-paper border-forest' : 'border-black/10 dark:border-white/15 text-ink/60 dark:text-paper/60'}`}>
-                      {c}
-                    </button>
-                  ))}
+              {userType !== 'transporter' && (
+                <div>
+                  <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{userType === 'farmer' ? t('auth.cropsYouGrow') : t('auth.cropsYouBuy')}</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CROP_OPTIONS.map(option => (
+                      <button type="button" key={option.value} onClick={() => toggleCrop(option.value)} className={`text-xs px-2.5 py-1.5 rounded-full border ${crops.includes(option.value) ? 'bg-forest text-paper border-forest' : 'border-black/10 dark:border-white/15 text-ink/60 dark:text-paper/60'}`}>
+                        {t(option.key)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
               <button disabled={loading} type="submit" className="w-full bg-marigold hover:bg-marigold-dark text-ink dark:text-paper font-semibold py-2.5 rounded-lg transition-colors disabled:opacity-60">
                 {loading ? t('auth.creatingAccount') : t('auth.createAccount')}
               </button>
@@ -214,7 +274,7 @@ export default function Auth({ mode = 'login' }) {
           <div className="mt-6 pt-5 border-t border-black/5 dark:border-white/10">
             <p className="text-xs font-semibold text-ink/50 dark:text-paper/50 mb-2">{t('auth.demoAccountHint')}</p>
             <div className="grid grid-cols-1 gap-1.5">
-              {DEMO_ACCOUNTS.map(d => (
+              {demoAccounts.map(d => (
                 <button key={d.email} onClick={() => quickDemoLogin(d.email)} className="text-left text-xs bg-wheat dark:bg-white/5 hover:bg-marigold/20 rounded-lg px-3 py-2 transition-colors">
                   {d.label}
                 </button>

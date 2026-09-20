@@ -30,6 +30,25 @@ const WINDOW_ICONS = {
   STORE_15_DAYS: '🏭',
 }
 
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Wheat: 'auth.crop.wheat',
+  Potato: 'auth.crop.potato',
+  Onion: 'auth.crop.onion',
+  Soybean: 'auth.crop.soybean',
+  Maize: 'auth.crop.maize',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
+
 export default function ArrivalIntelligence() {
   const { user, role } = useAuth()
   const { theme } = useTheme()
@@ -101,7 +120,7 @@ export default function ArrivalIntelligence() {
           <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('common.crop')}</label>
           <select value={crop} onChange={e => setCrop(e.target.value)}
             className="border border-black/10 dark:border-white/15 rounded-lg px-3 py-2 text-sm bg-white dark:bg-white/5 dark:text-paper">
-            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
+            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {getLocalizedCropName(c.name, t)}</option>)}
           </select>
         </div>
         <div>
@@ -143,7 +162,7 @@ export default function ArrivalIntelligence() {
         <>
           {arrivals.is_demo && (
             <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg text-amber-700 dark:text-amber-300 text-xs">
-              {arrivals.demo_disclaimer}
+              {t('arrivalIntel.demoDisclaimer')}
             </div>
           )}
           {/* Dedicated arrival-volume freshness label -- distinct from the
@@ -153,7 +172,7 @@ export default function ArrivalIntelligence() {
               volume at all yet. */}
           {!arrivals.is_demo && arrivals.arrivals_status && arrivals.arrivals_status !== 'live' && (
             <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg text-amber-700 dark:text-amber-300 text-xs">
-              {arrivals.arrivals_demo_disclaimer}
+              {t('arrivalIntel.arrivalsDisclaimer')}
             </div>
           )}
 
@@ -244,7 +263,7 @@ export default function ArrivalIntelligence() {
         <div>
           <h2 className="font-display text-2xl font-bold mb-1">🎯 {t('arrivalIntel.bestSellingWindow')}</h2>
           <p className="text-ink/60 dark:text-paper/60 mb-4 text-sm">
-            {window_.forecast_disclaimer}
+            {t('arrivalIntel.forecastDisclaimer')}
           </p>
 
           {/* Recommendation banner */}
@@ -256,7 +275,7 @@ export default function ArrivalIntelligence() {
                 <p className="font-bold text-xl">{t(RECOMMENDATION_KEY[window_.recommendation] || window_.recommendation)}</p>
               </div>
             </div>
-            <p className="text-sm opacity-90">{window_.recommendation_explanation}</p>
+            <p className="text-sm opacity-90">{t('arrivalIntel.recommendationExplanation')}</p>
           </div>
 
           {/* Options */}
@@ -307,7 +326,7 @@ export default function ArrivalIntelligence() {
       {!loading && !arrivals?.available && (
         <div className="text-center py-12 text-ink/40 dark:text-paper/40">
           <p className="text-4xl mb-3">📊</p>
-          <p className="font-medium">{t('arrivalIntel.noDataFor', { crop, market })}</p>
+          <p className="font-medium">{t('arrivalIntel.noDataFor', { crop: getLocalizedCropName(crop, t), market })}</p>
           <p className="text-sm mt-1">{t('arrivalIntel.tryDifferent')}</p>
         </div>
       )}

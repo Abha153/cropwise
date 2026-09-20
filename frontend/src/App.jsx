@@ -28,6 +28,7 @@ import TransactionDetail from './pages/TransactionDetail'
 // Phase 6-18 new pages
 import Storage from './pages/Storage'
 import Transport from './pages/Transport'
+import TransporterDashboard from './pages/TransporterDashboard'
 import ArrivalIntelligence from './pages/ArrivalIntelligence'
 import BestOption from './pages/BestOption'
 
@@ -72,6 +73,7 @@ export default function App() {
       {/* Phase 6-18 new routes */}
       <Route path="/storage" element={<Protected><Storage /></Protected>} />
       <Route path="/transport" element={<Protected role="farmer"><Transport /></Protected>} />
+      <Route path="/transporter/dashboard" element={<Protected role="transporter"><TransporterDashboard /></Protected>} />
       <Route path="/arrivals" element={<Protected><ArrivalIntelligence /></Protected>} />
       <Route path="/best-option" element={<Protected><BestOption /></Protected>} />
 

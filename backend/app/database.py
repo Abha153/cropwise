@@ -76,6 +76,9 @@ def run_lightweight_migrations():
 
             # Legacy columns
             add_column_if_missing("market_prices", "data_source", "VARCHAR NOT NULL DEFAULT 'demo'")
+            # Phase 3/4 freshness columns
+            add_column_if_missing("market_prices", "observed_at", "VARCHAR")
+            add_column_if_missing("market_prices", "fetched_at", "DATETIME")
             add_column_if_missing("farmers", "last_login", "DATETIME")
             add_column_if_missing("buyers", "last_login", "DATETIME")
 
@@ -98,6 +101,35 @@ def run_lightweight_migrations():
             # what actually connects Buyer Demand -> Lot -> Match -> Offer.
             add_column_if_missing("buyer_offers", "lot_id", "INTEGER")
             add_column_if_missing("buyer_offers", "buyer_demand_id", "INTEGER")
+
+            # Transporter quote / negotiation / agreed price + delivered_at,
+            # added to the TransportRequest model in this pass.
+            add_column_if_missing("transport_requests", "picked_up_at", "DATETIME")
+            add_column_if_missing("transport_requests", "delivered_at", "DATETIME")
+            add_column_if_missing("transport_requests", "quote_status", "VARCHAR NOT NULL DEFAULT 'AWAITING_QUOTE'")
+            add_column_if_missing("transport_requests", "quoted_price", "FLOAT")
+            add_column_if_missing("transport_requests", "quoted_at", "DATETIME")
+            add_column_if_missing("transport_requests", "counter_price", "FLOAT")
+            add_column_if_missing("transport_requests", "counter_by", "VARCHAR")
+            add_column_if_missing("transport_requests", "counter_at", "DATETIME")
+            add_column_if_missing("transport_requests", "agreed_price", "FLOAT")
+            add_column_if_missing("transport_requests", "agreed_at", "DATETIME")
+
+            add_column_if_missing("buyer_verifications", "submitted_at", "DATETIME")
+            add_column_if_missing("buyer_verifications", "reviewed_at", "DATETIME")
+            add_column_if_missing("buyer_verifications", "reviewed_by", "VARCHAR")
+
+            # Real authenticated Transporter <-> Farmer workflow. New
+            # tables (transporters, transport_offers, transport_messages,
+            # transport_reviews) are created by Base.metadata.create_all()
+            # automatically -- only NEW COLUMNS on the pre-existing
+            # transport_requests table need an explicit ADD COLUMN here.
+            add_column_if_missing("transport_requests", "transporter_id", "INTEGER")
+            add_column_if_missing("transport_requests", "negotiation_status", "VARCHAR NOT NULL DEFAULT 'OPEN'")
+            add_column_if_missing("transport_requests", "claimed_at", "DATETIME")
+            add_column_if_missing("transport_requests", "transporter_agreed_price", "FLOAT")
+            add_column_if_missing("transport_requests", "transporter_agreed_at", "DATETIME")
+            add_column_if_missing("transport_requests", "completed_at", "DATETIME")
         return
 
     # Postgres path: only the columns added after the Supabase migration.
@@ -107,5 +139,76 @@ def run_lightweight_migrations():
         ))
         conn.execute(text(
             "ALTER TABLE market_prices ADD COLUMN IF NOT EXISTS source_timestamp VARCHAR"
+        ))
+        # Phase 3/4 freshness columns
+        conn.execute(text(
+            "ALTER TABLE market_prices ADD COLUMN IF NOT EXISTS observed_at VARCHAR"
+        ))
+        conn.execute(text(
+            "ALTER TABLE market_prices ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP"
+        ))
+        # Transporter quote / negotiation / agreed price + delivered_at.
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS picked_up_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS quote_status VARCHAR NOT NULL DEFAULT 'AWAITING_QUOTE'"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS quoted_price DOUBLE PRECISION"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS quoted_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS counter_price DOUBLE PRECISION"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS counter_by VARCHAR"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS counter_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS agreed_price DOUBLE PRECISION"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS agreed_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE buyer_verifications ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE buyer_verifications ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE buyer_verifications ADD COLUMN IF NOT EXISTS reviewed_by VARCHAR"
+        ))
+        # Real authenticated Transporter <-> Farmer workflow. New tables
+        # (transporters, transport_offers, transport_messages,
+        # transport_reviews) are created by Base.metadata.create_all()
+        # automatically on a fresh or already-migrated Supabase database --
+        # only the new columns on the pre-existing transport_requests
+        # table need an explicit ADD COLUMN IF NOT EXISTS here.
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS transporter_id INTEGER"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS negotiation_status VARCHAR NOT NULL DEFAULT 'OPEN'"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS transporter_agreed_price DOUBLE PRECISION"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS transporter_agreed_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP"
         ))
         conn.commit()

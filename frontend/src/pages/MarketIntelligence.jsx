@@ -7,7 +7,27 @@ import { useTheme } from '../context/ThemeContext'
 import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { resolveDefaultLocation, useGeolocatedMarket } from '../utils/location'
+import { formatTimestamp } from '../utils/datetime'
 import { useI18n } from '../i18n/I18nContext'
+
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  Onion: 'auth.crop.onion',
+  Potato: 'auth.crop.potato',
+  Wheat: 'auth.crop.wheat',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Maize: 'auth.crop.maize',
+  Soybean: 'auth.crop.soybean',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
 
 export default function MarketIntelligence() {
   const { user, role } = useAuth()
@@ -75,7 +95,7 @@ export default function MarketIntelligence() {
         <div>
           <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('common.crop')}</label>
           <select value={crop} onChange={e => setCrop(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm bg-white dark:bg-white/5 dark:text-paper">
-            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
+            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {getLocalizedCropName(c.name, t)}</option>)}
           </select>
         </div>
         <div>
@@ -184,7 +204,7 @@ export default function MarketIntelligence() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Badge tone={isMandi ? 'success' : isDistrict ? 'district' : 'neutral'}>
-                        {isMandi ? '🟢 Government Mandi Price' : isDistrict ? '🟣 District Reference Price' : '🟡 Demo Data'}
+                        {isMandi ? `🟢 ${t('market.sourceGovernmentMandi')}` : isDistrict ? `🟣 ${t('market.sourceDistrictReference')}` : `🟡 ${t('market.sourceDemoData')}`}
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right font-mono-data">₹{o.modal_price_per_kg}</td>
@@ -192,7 +212,19 @@ export default function MarketIntelligence() {
                     <td className="px-4 py-3 text-right font-mono-data">₹{o.transport_cost.toLocaleString()}</td>
                     <td className="px-4 py-3 text-right font-mono-data">₹{(o.mandi_charges + o.handling_cost).toLocaleString()}</td>
                     <td className="px-4 py-3 text-right font-mono-data font-semibold">₹{o.net_profit.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right text-xs text-ink/50 dark:text-paper/50">{o.as_of_date || '—'}</td>
+                    <td className="px-4 py-3 text-right text-xs text-ink/50 dark:text-paper/50">
+                      {/* observed_at: when the SOURCE recorded the price. */}
+                      <div>{o.as_of_date || '—'}</div>
+                      {/* fetched_at: when CropWise retrieved it. Only ever
+                          present for live rows -- demo rows return null from
+                          the backend, so nothing is rendered and no
+                          timestamp is invented. */}
+                      {formatTimestamp(o.fetched_at) && (
+                        <div className="text-[10px] text-ink/40 dark:text-paper/40 mt-0.5">
+                          {t('market.fetchedAt')}: {formatTimestamp(o.fetched_at)}
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 )})}
               </tbody>
@@ -201,14 +233,14 @@ export default function MarketIntelligence() {
               <p className="text-[11px] text-ink/40 dark:text-paper/40">{t('market.estimateDisclaimer')}</p>
               {result.options.some(o => o.source_resource === 'district_variety') && (
                 <p className="text-[11px] text-ink/40 dark:text-paper/40">
-                  🟣 District Reference Price is calculated from available variety-level government records and is not a specific mandi's modal price.
+                  🟣 {t('market.districtReferenceNote')}
                 </p>
               )}
               {(result.data_source_summary === 'demo' || result.data_source_summary === 'mixed') && (
                 <p className="text-[11px] text-ink/40 dark:text-paper/40">
                   {result.data_source_summary === 'mixed'
-                    ? '🟡 This comparison mixes live government prices with demo data — check each row\'s own source label below.'
-                    : '🟡 Some or all rows above use demo data — live government data was unavailable for this comparison.'}
+                    ? `🟡 ${t('market.mixedDataNote')}`
+                    : `🟡 ${t('market.demoDataSummary')}`}
                 </p>
               )}
             </div>
@@ -216,7 +248,7 @@ export default function MarketIntelligence() {
 
           {result.unavailable_markets && result.unavailable_markets.length > 0 && (
             <div className="bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-900 text-sky-800 dark:text-sky-300 text-xs rounded-lg px-3 py-2 mb-3 mt-3 flex items-center justify-between gap-2 flex-wrap">
-              ℹ️ No official government record found for: {result.unavailable_markets.map(m => m.market).join(', ')}.
+              ℹ️ {t('market.unavailableGovernmentRecord', { markets: result.unavailable_markets.map(m => m.market).join(', ') })}
             </div>
           )}
           </>

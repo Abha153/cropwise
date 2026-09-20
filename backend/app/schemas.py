@@ -221,6 +221,13 @@ class FarmPoolRequest(BaseModel):
     location: str
     quantity_kg: float
     destination_market: Optional[str] = None
+    # Optional link to a real TransportRequest (app/models.py). When set
+    # and that request has a transporter_agreed_price (i.e. negotiation is
+    # AGREED), the pool's shared-cost allocation uses that real,
+    # server-side price instead of the transport_optimizer estimate. The
+    # estimate itself is never overwritten -- see
+    # transport_optimizer.shared_transport_plan()'s `cost_basis` field.
+    transport_request_id: Optional[int] = None
 
 
 # ---------- Assistant ----------
@@ -327,8 +334,16 @@ class BuyerVerificationOut(BaseModel):
     verification_notes: Optional[str]
     verified_at: Optional[dt.datetime]
     rejected_reason: Optional[str]
+    submitted_at: Optional[dt.datetime] = None
+    reviewed_at: Optional[dt.datetime] = None
+    reviewed_by: Optional[str] = None
     created_at: dt.datetime
     updated_at: dt.datetime
+    # Computed display fields (see app/routers/buyer_verification.py::display_info) --
+    # the 4 canonical tiers, never raw internal state, shown to farmers/admins/advisor.
+    display_status: Optional[str] = None
+    display_label: Optional[str] = None
+    display_description: Optional[str] = None
 
 
 # ---------- Lot (Phase 4) ----------
@@ -450,11 +465,116 @@ class TransportRequestCreate(BaseModel):
     estimated_cost: Optional[float] = None
 
 
+class TransportQuoteSubmit(BaseModel):
+    """A quote the transporter gave the farmer (recorded by the farmer --
+    see the note on TransportRequest.quote_status for why there is no
+    separate transporter login)."""
+    quoted_price: float = Field(..., gt=0)
+
+
+class TransportCounterOffer(BaseModel):
+    counter_price: float = Field(..., gt=0)
+
+
 class TransportStatusUpdate(BaseModel):
     status: str
     driver_name: Optional[str] = None
     driver_contact: Optional[str] = None
     vehicle_type: Optional[str] = None
+
+
+# ---------- Transporter (real authenticated Farmer<->Transporter workflow) ----------
+
+class TransporterRegister(BaseModel):
+    name: str
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    phone: str = ""
+    business_name: Optional[str] = None
+    service_area: Optional[str] = None
+    vehicle_types: List[str] = Field(default_factory=list)
+    preferred_language: str = "en"
+
+
+class TransporterOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    email: str
+    phone: str
+    business_name: Optional[str]
+    service_area: Optional[str]
+    vehicle_types: List[str]
+    preferred_language: str
+    rating: float
+    rating_count: int
+
+
+class TransportOfferCreate(BaseModel):
+    amount: float = Field(..., gt=0)
+    message: Optional[str] = None
+
+
+class TransportOfferOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    transport_request_id: int
+    sequence: int
+    sender_role: str
+    sender_id: int
+    receiver_role: str
+    receiver_id: int
+    amount: float
+    message: Optional[str]
+    status: str
+    created_at: dt.datetime
+    responded_at: Optional[dt.datetime]
+
+
+class TransportMessageCreate(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+
+
+class TransportMessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    transport_request_id: int
+    sender_role: str
+    sender_id: int
+    recipient_role: str
+    recipient_id: int
+    message: str
+    created_at: dt.datetime
+
+
+class TransportReviewCreate(BaseModel):
+    rating: float = Field(..., ge=1, le=5)
+    punctuality: Optional[float] = Field(None, ge=1, le=5)
+    communication: Optional[float] = Field(None, ge=1, le=5)
+    handling: Optional[float] = Field(None, ge=1, le=5)
+    reliability: Optional[float] = Field(None, ge=1, le=5)
+    comment: Optional[str] = None
+
+
+class TransportReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    transport_request_id: int
+    reviewer_role: str
+    reviewer_id: int
+    reviewee_role: str
+    reviewee_id: int
+    rating: float
+    punctuality: Optional[float]
+    communication: Optional[float]
+    handling: Optional[float]
+    reliability: Optional[float]
+    comment: Optional[str]
+    created_at: dt.datetime
+
+
+class TransporterStatusUpdate(BaseModel):
+    status: str
 
 
 class TransportRequestOut(BaseModel):
@@ -505,7 +625,17 @@ class TransactionStatusUpdate(BaseModel):
 
 class PaymentCreate(BaseModel):
     transaction_id: int
-    amount: float
+    # BUGFIX: was `amount: float` (required) with no default, but the
+    # actual frontend call (frontend/src/pages/TransactionDetail.jsx ->
+    # api.createPayment) never sends an `amount` at all -- every real
+    # payment-creation request from the app was therefore failing
+    # pydantic validation (422) before even reaching the router. The
+    # payment amount is authoritative server-side (Transaction.total_amount,
+    # set once at offer-acceptance and never client-writable after that;
+    # see app/routers/payments.py create_payment()), so `amount` here is
+    # now optional and, if supplied, is only used to reject a mismatched
+    # client value -- never to set the actual charged amount.
+    amount: Optional[float] = None  # optional -- server derives from transaction
     payment_method: Optional[str] = None
     notes: Optional[str] = None
     payment_due_date: Optional[str] = None

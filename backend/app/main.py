@@ -12,9 +12,10 @@ from app.routers import (
     quality, assistant, admin,
 )
 from app.routers import lots, buyer_demands, buyer_verification
-from app.routers import transactions, payments, grievances
-from app.routers import storage, transport, ratings
+from app.routers import transactions, payments, grievances, receipts
+from app.routers import storage, transport, ratings, trip_reviews
 from app.routers import weather
+from app.routers import transporters, transport_negotiation
 
 Base.metadata.create_all(bind=engine)
 run_lightweight_migrations()
@@ -32,6 +33,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# i18n Phase 6 -- see app/errors.py's module docstring. Purely additive:
+# only affects the new AppError type, never plain HTTPException.
+from app.errors import install_error_handlers
+install_error_handlers(app)
 
 
 # Lightweight request-timing diagnostic: method, path (no query string --
@@ -111,8 +117,12 @@ app.include_router(buyer_demands.router)
 app.include_router(buyer_verification.router)
 app.include_router(transactions.router)
 app.include_router(payments.router)
+app.include_router(receipts.router)
 app.include_router(grievances.router)
 app.include_router(storage.router)
 app.include_router(transport.router)
+app.include_router(transporters.router)
+app.include_router(transport_negotiation.router)
 app.include_router(ratings.router)
+app.include_router(trip_reviews.router)
 app.include_router(weather.router)

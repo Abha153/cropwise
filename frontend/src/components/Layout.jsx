@@ -15,6 +15,22 @@ import Avatar from './Avatar'
 // this reorganization; nothing added or removed, only grouped and given a
 // consistent icon system in place of the previous emoji.
 function useNavGroups(role, t) {
+  if (role === 'transporter') {
+    return [
+      {
+        heading: t('navOverview'),
+        links: [
+          { to: '/transporter/dashboard', label: t('navDashboard'), Icon: Home },
+        ],
+      },
+      {
+        heading: t('navAccount'),
+        links: [
+          { to: '/profile', label: t('navProfile'), Icon: User },
+        ],
+      },
+    ]
+  }
   if (role === 'buyer') {
     return [
       {

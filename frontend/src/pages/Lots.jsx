@@ -4,11 +4,31 @@ import { useAuth } from '../context/AuthContext'
 import { useI18n } from '../i18n/I18nContext'
 import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
+import VerificationBadge from '../components/VerificationBadge'
 
 const CROPS = [
   'Tomato', 'Onion', 'Potato', 'Wheat', 'Paddy (Rice)', 'Maize',
   'Soybean', 'Chana (Gram)', 'Groundnut', 'Mustard'
 ]
+
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  Onion: 'auth.crop.onion',
+  Potato: 'auth.crop.potato',
+  Wheat: 'auth.crop.wheat',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Maize: 'auth.crop.maize',
+  Soybean: 'auth.crop.soybean',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
 
 const STATUS_TONE = {
   AVAILABLE: 'success', UNDER_OFFER: 'info', DRAFT: 'neutral',
@@ -135,7 +155,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
       <div className="flex items-start justify-between mb-2 gap-2 flex-wrap">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-display font-bold text-lg">{lot.crop}</span>
+            <span className="font-display font-bold text-lg">{getLocalizedCropName(lot.crop, t)}</span>
             <Badge tone={STATUS_TONE[lot.status] || 'neutral'}>{t(`lots.status.${lot.status}`)}</Badge>
           </div>
           <div className="text-xs text-ink/50 dark:text-paper/50 font-mono-data mt-0.5">
@@ -220,8 +240,8 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
                   <span className="font-semibold">#{m.rank} {m.company_name}</span>
                   <span className="font-mono-data font-bold text-forest">{m.match_score}%</span>
                 </div>
-                <div className="text-ink/50 dark:text-paper/50">
-                  {m.verification_status === 'verified' && `✓ ${t('buyerDemands.verifiedBuyer')} · `}
+                <div className="text-ink/50 dark:text-paper/50 flex items-center gap-1 flex-wrap">
+                  <VerificationBadge buyerId={m.buyer_id} compact />
                   {m.location} · ₹{m.estimated_price_per_kg}/kg est.
                   {m.matched_demand_id && ` · ${t('lots.activeDemand')}`}
                 </div>
@@ -363,7 +383,7 @@ function CreateLotForm({ onCreated, onClose }) {
         <div>
           <label className={lbl}>{t('common.crop')}</label>
           <select value={form.crop} onChange={set('crop')} className={inp}>
-            {CROPS.map(c => <option key={c}>{c}</option>)}
+            {CROPS.map(c => <option key={c}>{getLocalizedCropName(c, t)}</option>)}
           </select>
         </div>
         <div>
@@ -429,7 +449,7 @@ function CreateLotForm({ onCreated, onClose }) {
         ) : (
           <label className="flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-black/10 dark:border-white/15 rounded-lg py-5 cursor-pointer hover:bg-wheat/30">
             <span className="text-xl">📷</span>
-            <span className="text-xs text-ink/50">{t('lots.uploadPhotoOf', { crop: form.crop })}</span>
+            <span className="text-xs text-ink/50">{t('lots.uploadPhotoOf', { crop: getLocalizedCropName(form.crop, t) })}</span>
             <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
               onChange={e => {
                 const f = e.target.files?.[0]
@@ -524,7 +544,7 @@ export default function Lots() {
         )}
         <select value={cropFilter} onChange={e => setCropFilter(e.target.value)} className="border border-black/10 dark:border-white/15 rounded-lg px-3 py-2 text-sm bg-white dark:bg-white/5 dark:text-paper">
           <option value="">{t('storage.allCrops')}</option>
-          {CROPS.map(c => <option key={c}>{c}</option>)}
+          {CROPS.map(c => <option key={c}>{getLocalizedCropName(c, t)}</option>)}
         </select>
       </div>
 

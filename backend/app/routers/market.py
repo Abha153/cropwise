@@ -11,7 +11,8 @@ from app import models
 from app.mock_data.crops import CROPS, CROP_BY_NAME
 from app.mock_data.locations import MARKETS, distance_between, nearest_market_to_coordinates, haversine_km
 from app.services.transport_optimizer import net_profit_breakdown
-from app.services import live_market_data, mandi_directory, agmarknet_service
+from app.services import live_market_data, mandi_directory, agmarknet_service, mandi_sync
+from app.auth_utils import require_admin
 from app.config import logger, settings
 
 router = APIRouter(prefix="/market", tags=["market"])
@@ -66,6 +67,36 @@ def live_markets(state: str = settings.default_demo_state):
             "the discovery request didn't succeed."
         ),
     }
+
+
+@router.get("/sync-status")
+def sync_status(db: Session = Depends(get_db)):
+    """Provider-level freshness: when the last SUCCESSFUL official-data
+    sync completed, and whether the most recent attempt failed.
+
+    Distinct from any individual price's own timestamps -- a price row
+    carries `observed_at` (when the source says it was observed) and
+    `fetched_at` (when CropWise obtained it); this endpoint answers the
+    separate question "how current is our picture of this provider overall".
+    """
+    return mandi_sync.freshness(db)
+
+
+@router.post("/sync")
+def trigger_sync(
+    state: str = Query(mandi_sync.DEFAULT_SYNC_STATE),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Admin-only: run an official-data sync for one state.
+
+    Government-sourced DAILY mandi prices -- the newest record available
+    may legitimately be from a previous day. Never describe this as
+    real-time. Returns an honest status ("ok" / "no_records" /
+    "not_configured" / "error") rather than failing the request when the
+    provider is unreachable.
+    """
+    return mandi_sync.sync_state(db, state=state)
 
 
 @router.get("/data-source-status")
@@ -415,6 +446,11 @@ def _compare_markets_core(
             "max_price_per_kg": round(latest["max_price"] / 100.0, 2),
             "arrivals_tonnes": latest["arrivals_tonnes"],
             "as_of_date": latest["date"],
+            # When CropWise actually retrieved this record from the source.
+            # Distinct from `as_of_date`, which is when the SOURCE says the
+            # price was observed. Null for demo rows (nothing was fetched),
+            # which is why the UI must omit it rather than substitute a time.
+            "fetched_at": latest.get("fetched_at"),
             "data_source": latest["data_source"],  # "live" | "demo" -- per-market, never blended silently
             "source_resource": latest.get("source_resource"),  # "market" | "district_variety" | None
             "matched_market_name": latest.get("matched_market_name", m["name"]),

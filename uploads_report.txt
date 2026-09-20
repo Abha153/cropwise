@@ -1,0 +1,53 @@
+﻿=== UPLOADED TRANSLATION FILES ===
+as.json: 264 keys [TRANSLATED]: αª╕αºìαª«αª╛αº░αºìαªƒ αª¼αª£αª╛αº░αÑñ αª¡αª╛αª▓ αªªαª╛αª«αÑñ αª╢αªòαºìαªñαª┐αª╢αª╛αª▓αºÇ αªòαºâαª╖αªòαÑñ
+bho.json: 265 keys [TRANSLATED]: αñ╕αÑìαñ«αñ╛αñ░αÑìαñƒ αñ¼αñ╛αñ£αñ╛αñ░αÑñ αñ¼αñóαñ╝αñ┐αñ»αñ╛ αñ¡αñ╛αñ╡αÑñ αñ«αñ£αñ¼αÑéαññ αñòαñ┐αñ╕αñ╛αñ¿αÑñ
+gu.json: 420 keys [TRANSLATED]: α¬╕α½ìα¬«α¬╛α¬░α½ìα¬ƒ α¬¼α¬£α¬╛α¬░α½ï. α¬╕α¬╛α¬░α¬╛ α¬¡α¬╛α¬╡. α¬«α¬£α¬¼α½éα¬ñ α¬ûα½çα¬íα½éα¬ñα½ï.
+kn.json: 420 keys [TRANSLATED]: α▓╕α│ìα▓«α▓╛α▓░α│ìα▓ƒα│ì α▓«α▓╛α▓░α│üα▓òα▓ƒα│ìα▓ƒα│åα▓ùα▓│α│ü. α▓ëα▓ñα│ìα▓ñα▓« α▓¼α│åα▓▓α│åα▓ùα▓│α│ü. α▓¼α▓▓α▓┐α▓╖α│ìα▓á α▓░α│êα▓ñα▓░α│ü.
+mai.json: 265 keys [TRANSLATED]: αñ╕αÑìαñ«αñ╛αñ░αÑìαñƒ αñ¼αñ£αñ╛αñ░αÑñ αñ¿αÑÇαñò αñ¡αñ╛αñ╡αÑñ αñ╕αñ╢αñòαÑìαññ αñòαñ┐αñ╕αñ╛αñ¿αÑñ
+ml.json: 292 keys [TRANSLATED]: α┤╕α╡ìα┤«α┤╛α╡╝α┤ƒα╡ìα┤ƒα╡ì α┤╡α┤┐α┤¬α┤úα┤┐α┤òα╡╛. α┤«α╡åα┤Üα╡ìα┤Üα┤¬α╡ìα┤¬α╡åα┤ƒα╡ìα┤ƒ α┤╡α┤┐α┤▓α┤òα╡╛. α┤╢α┤òα╡ìα┤ñα┤░α┤╛α┤» α┤òα╡╝α┤╖α┤òα╡╝.
+or.json: 265 keys [TRANSLATED]: α¼╕α¡ìα¼«α¼╛α¼░α¡ìα¼ƒ α¼¼α¼£α¼╛α¼░αÑñ α¼¡α¼▓ α¼«α¡éα¼▓α¡ìα¡ƒαÑñ α¼╕α¼╢α¼òα¡ìα¼ñ α¼òα¡âα¼╖α¼òαÑñ
+pa.json: 265 keys [TRANSLATED]: α¿╕α¿«α¿╛α¿░α¿ƒ α¿«α⌐░α¿íα⌐Çα¿åα¿éαÑñ α¿¼α¿┐α¿╣α¿ñα¿░ α¿¡α¿╛α¿àαÑñ α¿«α¿£α¿╝α¿¼α⌐éα¿ñ α¿òα¿┐α¿╕α¿╛α¿¿αÑñ
+te.json: 420 keys [TRANSLATED]: α░╕α▒ìα░«α░╛α░░α▒ìα░ƒα▒ì α░«α░╛α░░α▒ìα░òα▒åα░ƒα▒ìα░▓α▒ü. α░«α▒åα░░α▒üα░ùα▒êα░¿ α░ºα░░α░▓α▒ü. α░¼α░▓α░«α▒êα░¿ α░░α▒êα░ñα▒üα░▓α▒ü.
+ur.json: 265 keys [TRANSLATED]: ╪│┘à╪º╪▒┘╣ ┘à┘å┌ê█î╪º┌║█ö ╪¿█ü╪¬╪▒ ┘é█î┘à╪¬█î┌║█ö ┘à╪╢╪¿┘ê╪╖ ┌⌐╪│╪º┘å█ö
+
+=== UPLOADED SCRIPTS ===
+i18n_tool.py: 86 lines
+  First line: #!/usr/bin/env python3
+  Second line: """CropWise i18n helper: status / dump / merge / validate.
+validate_all.py: 36 lines
+  First line: import sys, re, json, unicodedata
+  Second line: sys.path.insert(0,'/home/claude/tools')
+
+=== merged.zip ===
+merged.zip: 19103 entries
+  backend/
+  backend/.env.example
+  backend/.pytest_cache/
+  backend/.pytest_cache/.gitignore
+  backend/.pytest_cache/CACHEDIR.TAG
+  backend/.pytest_cache/README.md
+  backend/.pytest_cache/v/
+  backend/.pytest_cache/v/cache/
+  backend/.pytest_cache/v/cache/nodeids
+  backend/.pytest_cache/v/cache/stepwise
+  backend/.venv/
+  backend/.venv/.gitignore
+  backend/.venv/CACHEDIR.TAG
+  backend/.venv/Include/
+  backend/.venv/Include/site/
+  backend/.venv/Include/site/python3.12/
+  backend/.venv/Include/site/python3.12/greenlet/
+  backend/.venv/Include/site/python3.12/greenlet/greenlet.h
+  backend/.venv/Lib/
+  backend/.venv/Lib/site-packages/
+  backend/.venv/Lib/site-packages/annotated_types/
+  backend/.venv/Lib/site-packages/annotated_types/py.typed
+  backend/.venv/Lib/site-packages/annotated_types/test_cases.py
+  backend/.venv/Lib/site-packages/annotated_types/__init__.py
+  backend/.venv/Lib/site-packages/annotated_types/__pycache__/
+  backend/.venv/Lib/site-packages/annotated_types/__pycache__/test_cases.cpython-312.pyc
+  backend/.venv/Lib/site-packages/annotated_types/__pycache__/__init__.cpython-312.pyc
+  backend/.venv/Lib/site-packages/annotated_types-0.8.0.dist-info/
+  backend/.venv/Lib/site-packages/annotated_types-0.8.0.dist-info/INSTALLER
+  backend/.venv/Lib/site-packages/annotated_types-0.8.0.dist-info/licenses/
+  ... and 19073 more

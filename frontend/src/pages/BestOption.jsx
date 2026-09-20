@@ -64,7 +64,7 @@ export default function BestOption() {
   const hasMandiData = !!bestMandi && Number.isFinite(bestMandi.net_profit)
 
   let bestOptionType = null
-  let bestOptionLabel = 'No recommendation available'
+  let bestOptionLabel = t('bestOption.noRecommendation')
   if (hasBuyerData && hasMandiData) {
     const demandNetRev = bestDemand.target_price_per_kg * quantity
     bestOptionType = demandNetRev > bestMandi.net_profit ? 'buyer' : 'mandi'

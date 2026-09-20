@@ -4,6 +4,25 @@ import { useAuth } from '../context/AuthContext'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 
+const CROP_KEY_MAP = {
+  Tomato: 'auth.crop.tomato',
+  Onion: 'auth.crop.onion',
+  Potato: 'auth.crop.potato',
+  Wheat: 'auth.crop.wheat',
+  'Paddy (Rice)': 'auth.crop.paddyRice',
+  Maize: 'auth.crop.maize',
+  Soybean: 'auth.crop.soybean',
+  'Chana (Gram)': 'auth.crop.chanaGram',
+  Groundnut: 'auth.crop.groundnut',
+  Mustard: 'auth.crop.mustard',
+  Sugarcane: 'auth.crop.sugarcane',
+}
+
+function getLocalizedCropName(name, t) {
+  const key = CROP_KEY_MAP[name]
+  return key ? t(key) : name
+}
+
 export default function GroupSelling() {
   const { user } = useAuth()
   const { t } = useI18n()
@@ -56,7 +75,7 @@ export default function GroupSelling() {
         <div>
           <label className="text-xs font-semibold text-ink/60 dark:text-paper/60 block mb-1">{t('common.crop')}</label>
           <select value={crop} onChange={e => setCrop(e.target.value)} className="w-full border border-black/10 dark:border-white/15 rounded-lg px-3 py-2.5 text-sm bg-white dark:bg-white/5 dark:text-paper">
-            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
+            {crops.map(c => <option key={c.name} value={c.name}>{c.emoji} {getLocalizedCropName(c.name, t)}</option>)}
           </select>
         </div>
         <div>
@@ -81,7 +100,7 @@ export default function GroupSelling() {
           {pools.map(p => (
             <div key={p.id} className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-display font-semibold text-lg">{p.crop}</h3>
+                <h3 className="font-display font-semibold text-lg">{getLocalizedCropName(p.crop, t)}</h3>
                 <span className="text-xs text-ink/50 dark:text-paper/50">{p.fpo_name}</span>
               </div>
               <div className="grid grid-cols-2 gap-3 text-sm mb-3">
