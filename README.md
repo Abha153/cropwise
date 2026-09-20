@@ -1,445 +1,358 @@
 # CropWise
 
-**A decision-support platform for Indian farmers — not another mandi-price app.**
+A decision-support platform for individual farmers — comparing markets, computing real net profit after transport, and connecting farmers directly with verified buyers — built for SIH 2026 Problem Statement PS-26132.
 
-CropWise doesn't just show farmers a market price. It tells them their actual
-expected profit after transport and other costs, compares that across nearby
-markets, and connects them directly with a matching buyer. This README is
-generated from an audit of the actual source code in this repository — every
-claim below is backed by a file, a test, or a build log, not by the product
-pitch.
+**Live app:** https://cropwise-alpha.vercel.app · **API:** https://cropwise-backend-o21s.onrender.com
+
+> The backend runs on Render's free tier and may take 30–60s to wake up on first request after idling — if the live demo seems stuck, give it a minute and retry.
 
 ---
 
 ## Overview
 
-CropWise is a FastAPI + PostgreSQL backend and a React (Vite) frontend, built
-for the Smart India Hackathon problem statement on market linkages and price
-discovery for farmers. It combines government mandi-price data with a
-transport-cost model to answer one question a plain price ticker can't:
-**after you pay to move your crop, which market actually nets you the most?**
+CropWise is a full-stack web platform that helps a smallholder or mid-sized farmer answer one question: *given my crop, quantity, and location, where should I actually sell, and what will I actually net after costs?* Existing tools (eNAM, AGMARKNET, most private agritech apps) either publish a price or move produce at scale — none combine transparent net-realization math, explainable selling recommendations, and a verified farmer-to-buyer marketplace in one connected system aimed at a single farmer's decision.
+
+CropWise's decision-support logic — the recommendation engine, price forecaster, buyer matcher, and quality grader — is **deliberately rule-based and statistical, not machine learning**. This is a stated design choice (explainability over black-box accuracy for a first-time, possibly low-literacy user), not a placeholder for AI that didn't get built. Every number and recommendation on screen traces back to a visible, human-readable reason.
 
 ## Problem
 
-Farmers commonly sell to the nearest mandi or the first buyer who calls,
-because comparing markets requires data (today's prices, several mandis away)
-they don't have in a usable form, and even when prices are visible, farmers
-rarely calculate the transport cost against the price gap — so a
-higher-priced market 40 km further away can quietly be the worse deal.
+- **Price uncertainty**: mandi prices vary market-to-market and farmers rarely see more than one.
+- **No net-profit visibility**: a higher sticker price at a distant market can be a worse deal once transport is priced in — almost nothing shows this.
+- **Fragmented buyer access**: farmers sell to whoever shows up, not necessarily the best available buyer.
+- **Language/literacy barriers**: most digital-agriculture tools are English/Hindi-only text interfaces.
 
 ## Solution
 
-CropWise's core loop is:
+CropWise pulls together market comparison, real transport-cost modelling, an explainable sell-now-vs-hold recommendation, a verified marketplace, buyer matching, shared-transport pooling, and a multilingual text/voice assistant — all working against the same underlying data, not parallel copies of the same logic.
+
+## Why CropWise
+
+| Traditional way | CropWise |
+|---|---|
+| Shows only the market price | Shows your expected net profit after transport and costs |
+| One market, no comparison | Compares nearby markets automatically |
+| No buyer visibility | Matches you with verified, ranked buyers |
+| No explanation | Every recommendation shows its contributing factors |
+
+## Core Features
+
+- **Market Intelligence** — compare nearby markets on price, distance, and estimated transport, with an explicit **LIVE vs DEMO** label on every price shown (see [Market Data](#market-data)).
+- **Net Realization / Profit Calculator** — real transport, labour, packaging, and storage costs subtracted from revenue, side-by-side across selling options.
+- **AgriAdvisor** — an explainable sell-now-vs-hold recommendation with five visible contributing factors (demand, supply, weather risk, transport cost, price trend).
+- **Price Forecast** — a 7-day trend-and-volatility statistical forecast with a visible confidence score and a genuine backtested accuracy (walk-forward MAE/RMSE/MAPE against real historical data).
+- **Ask AgriAdvisor** — a multilingual, rule-based assistant that answers market/price/transport/buyer questions in natural language, backed by the same services every dedicated page uses.
+- **AgriMarket (Marketplace)** — post lots, receive and rank buyer offers, accept/reject with server-side validation.
+- **Smart Buyer Matching** — explainable multi-factor scoring (price, reliability, distance, quantity fit, verification) for every candidate buyer.
+- **Buyer Demands & Verification** — buyers post demand signals; buyer accounts go through a submit/review/approve verification workflow with an audit log.
+- **Transport & Transporter Marketplace** — real quote/counter-offer/agree negotiation between farmers and transporters, with status tracked to delivery.
+- **FarmPool** — split shared-truck transport cost with nearby farmers (see honest caveat under [FarmPool / Group Selling](#farmpool--group-selling)).
+- **Group Selling** — real, persisted cooperative-selling pools.
+- **Storage Marketplace** — browse and book storage facilities (currently demo facilities, real booking flow).
+- **Multilingual + Voice** — 15-language architecture; see the [honest coverage numbers](#multilingual--i18n) below rather than assuming uniform completeness.
+- **Admin Dashboard** — live-computed platform metrics and privacy-conscious login-activity tracking.
+- **Quality Assessment** — real analysis of an uploaded produce photo's actual pixels (heuristic, not a trained model).
+
+## How It Works
 
 ```
-Add produce  →  Compare nearby markets  →  Net realisation (price − transport − fees)
-     →  Best Selling Option  →  Find a buyer  →  Arrange transport  →  Get paid
+Add Produce → Market Analysis → Find Buyer → Create & Ship → Payment Received
 ```
 
-Every step is backed by a real, runnable feature in this repo — see the
-Implementation Status table below for exactly which parts are live data,
-which are a working rules-based engine, and which are demo/seeded for
-presentation purposes.
+## Core Decision Flow
 
-## Key Features
-
-- **Market Intelligence** — live government mandi prices (data.gov.in +
-  AGMARKNET/CEDA) with an honest LIVE/DEMO status on every figure.
-- **Net-realisation "Best Selling Option"** — the platform's core
-  differentiator: ranks markets by *price minus a modelled transport cost*,
-  not price alone.
-- **Price Forecast** — a 7-day forecast with a disclosed accuracy backtest,
-  not a black-box number.
-- **AgriAdvisor** — a rule-based, multilingual (Hindi/English) explainable
-  recommendation assistant. Not a general-purpose LLM — see
-  [Tech Stack](#tech-stack) below.
-- **Marketplace & buyer matching** — buyer demand listings, an offer flow,
-  and a buyer-verification workflow (CropWise's own admin review — not a
-  government or eNAM verification).
-- **FarmPool** — splits transport cost across nearby farmers heading to the
-  same market, using a realistic (diesel/vehicle-class/driver/toll) costing
-  model, not a flat rate.
-- **Group Selling** — pools produce through an FPO/cooperative for stronger
-  bulk-negotiation pricing.
-- **Transport Coordination** — request creation, vehicle-type selection,
-  and status tracking for a crop lot's trip.
-- **Storage Marketplace, Notifications, Grievances, Transaction history,
-  Quality grading from an uploaded photo** (a heuristic pixel/colour
-  analyser — not a trained computer-vision model), **and an admin
-  dashboard.**
-
-## How CropWise Works
-
-1. **Add Produce** — a farmer creates a crop lot (crop, quantity, quality).
-2. **Market Analysis** — CropWise compares nearby markets using live or demo
-   price data plus a distance-based transport estimate.
-3. **Best Selling Option** — the market with the highest *net* return is
-   surfaced, with the price/transport/fee breakdown shown, not hidden.
-4. **Find Buyer** — the farmer reviews buyer demands or offers and accepts one.
-5. **Create & Ship** — a transport request is created and tracked to delivery.
-6. **Payment Received** — a payment record is tracked through to completion.
-
-## Crop Prices / Market Intelligence
-
-This is the most scrutinised part of the codebase, so it's worth being exact
-about what's real:
-
-- **Primary source:** `data.gov.in`'s *"Current Daily Price of Various
-  Commodities from Various Markets (Mandi)"* dataset
-  (`backend/app/services/live_market_data.py`), queried live via `httpx`.
-- **Secondary source:** AGMARKNET data via the CEDA (Ashoka University) API
-  (`backend/app/services/agmarknet_service.py`), queried **concurrently**
-  with the primary source, with basic conflict detection between the two.
-- **Every price record carries:** `source`, `source_timestamp`/observed
-  date, `fetched_at`, and a `data_source` flag distinguishing `live` from
-  `demo`. The UI is required to show this rather than a bare number.
-- **Caching:** short-TTL in-memory caching so a burst of farmer requests
-  doesn't hammer the government API for the same crop/market.
-- **Fallback:** when the live sources are unreachable or have no record for
-  a crop/market, CropWise falls back to a **seeded, deterministic synthetic
-  price series** (12 crops × 20 markets across Chhattisgarh and Maharashtra)
-  and labels it as demo data — it does not silently show a stale or invented
-  number as live.
-- **Verified in this audit:** outbound network access to `data.gov.in`/CEDA
-  is not available from the environment this audit ran in, so live
-  ingestion itself could not be exercised here; the dual-source fetch,
-  caching, and LIVE/DEMO labelling logic were verified by reading the code
-  and its test suite, not by watching a live request succeed. Do not take
-  this README as confirmation that a live fetch was observed in this pass.
-- **Not implemented:** a persistent background sync job that ingests and
-  stores official records ahead of time (the current design fetches
-  on-demand per request, cached briefly).
+```
+Crop + Quantity + Location
+        │
+        ▼
+  Market Data (live-attempted, demo-labelled fallback)
+        │
+        ▼
+  Market Comparison across nearby markets
+        │
+        ▼
+  Transport Cost (vehicle/fuel/toll model)
+        │
+        ▼
+  Net Realization per market option
+        │
+        ▼
+  Recommendation (rule-based, explainable) ──► Buyer Match ──► Transaction
+```
 
 ## Architecture
 
-```
-┌──────────────┐      HTTPS/JSON       ┌────────────────────┐
-│ React (Vite) │ ───────────────────▶  │ FastAPI backend     │
-│ 25 pages     │ ◀───────────────────  │ 26 routers          │
-└──────────────┘                       └─────────┬───────────┘
-                                                  │ SQLAlchemy
-                                                  ▼
-                                        ┌────────────────────┐
-                                        │ PostgreSQL(Supabase)│
-                                        │ 20 tables            │
-                                        └────────────────────┘
-        External:  data.gov.in  ·  CEDA/AGMARKNET  ·  Open-Meteo (weather)
+```mermaid
+flowchart TB
+    subgraph Client["Frontend — React 18 + Vite + Tailwind"]
+        UI[Pages / Components]
+        I18N[Custom i18n layer]
+    end
+
+    subgraph API["Backend — FastAPI (30 routers)"]
+        AUTH[JWT + bcrypt auth]
+        SVC[14 service modules<br/>recommendation, forecast, matching,<br/>transport, weather, quality]
+    end
+
+    subgraph Data["Data layer"]
+        PG[(PostgreSQL<br/>hosted on Supabase)]
+        SEED[Seeded demo dataset<br/>60 days history, 10 crops, 20 markets]
+    end
+
+    subgraph External["External APIs — optional, fallback-first"]
+        GOV[data.gov.in — mandi prices]
+        METEO[Open-Meteo — weather]
+    end
+
+    UI -->|fetch, JWT bearer| API
+    API --> AUTH
+    API --> SVC
+    SVC --> PG
+    SVC -.live attempt, falls back on failure.-> GOV
+    SVC -.live attempt, falls back on failure.-> METEO
+    SVC -.demo mode.-> SEED
 ```
 
-Diagrams from an earlier project write-up (architecture, workflows, ER
-diagram, data flow) are kept in
-[`research paper and diagrams/`](research%20paper%20and%20diagrams/) for
-reference; they were not re-verified line-by-line as part of this audit.
+**Note on Supabase**: Supabase is used here strictly as managed PostgreSQL hosting via SQLAlchemy — there is no Supabase Auth, no Supabase client SDK, no Row Level Security policies in this repository, and no Storage/Realtime usage. If you're evaluating this as a "Supabase project," it's more accurately "a Postgres project that happens to be hosted on Supabase."
 
 ## Tech Stack
 
-**Backend:** FastAPI, SQLAlchemy 2.0, PostgreSQL (psycopg2), Pydantic v2,
-JWT auth (python-jose + passlib/bcrypt), httpx, Pillow, pytest.
-**Frontend:** React 18, Vite, Tailwind CSS, react-router-dom, Recharts,
-lucide-react icons. No axios — a thin `fetch` wrapper in `src/api/client.js`.
-**No ML/LLM framework is present anywhere in this codebase** (no OpenAI/
-Anthropic/TensorFlow/PyTorch/scikit-learn import exists) — the "AI" features
-are rule-based or statistical, and say so in their own code comments.
+**Frontend**: React 18, Vite 5, Tailwind CSS, React Router, Recharts, lucide-react
+**Backend**: FastAPI, SQLAlchemy 2.0, Pydantic v2, `python-jose` (JWT), `passlib`/`bcrypt`, `httpx`
+**Database**: PostgreSQL (Supabase-hosted)
+**Testing**: `pytest` — 22 files, 197 passing / 6 skipped at time of this audit
+**Deployment**: Frontend on Vercel, backend on Render
+
+## Database & Supabase
+
+- 28 SQLAlchemy models covering farmers, buyers, listings, lots, offers, transactions, payments, receipts, transport (requests/offers/messages/reviews), storage, grievances, ratings, notifications, group-selling pools, buyer verification (+ audit log), and login events.
+- **No SQLite fallback** — `DATABASE_URL` must point at a real Postgres instance or the backend refuses to start.
+- Schema evolution is additive-only: `Base.metadata.create_all()` on startup plus a hand-written migration function that only ever adds tables/nullable columns, never drops or rewrites data. There's no Alembic and no `.sql` migration files in this repo.
+- `login_events` is deliberately minimal by design — never stores a password, hash, token, API key, IP, or the raw email typed, only user id (if matched), role, timestamp, and success/failure.
+
+## Market Data
+
+Market prices are served through a layered pipeline, labelled honestly at every step:
+
+1. **Live attempt** against data.gov.in (two resources: market-specific, then district-aggregate) — requires `DATA_GOV_IN_API_KEY` and `MARKET_DATA_SOURCE=live`.
+2. **Demo dataset** — 60 days of seeded historical prices per crop/market, used whenever live mode isn't configured, times out, errors, or has no record for that exact selection.
+
+The API and UI distinguish `status: ok / no_records / error` — a government "no record for this selection" is never silently replaced with a demo number presented as live. **As of this audit, a real successful live fetch has not been directly observed** (development happened in a network-restricted sandbox) — the client code is written to the documented API contract and covered by mocked-response tests, but treat "live data.gov.in" as implemented-but-field-unverified until you confirm it against a deployed instance with real internet access.
+
+## Recommendation / Intelligence
+
+**None of CropWise's decision-support components are machine learning.** This is intentional — see [Core Features](#core-features). Specifically:
+
+| Component | Method |
+|---|---|
+| AgriAdvisor recommendation | Deterministic rules over demand/supply ratio, weather risk, price trend, transport-cost ratio |
+| Price forecast | Least-squares trend regression + volatility confidence band, with real walk-forward backtesting |
+| Buyer matching | Weighted deterministic scoring across 7 factors |
+| Quality grading | Heuristic pixel/color-distribution analysis of the real uploaded image |
+| Weather risk | Real Open-Meteo live attempt, deterministic seeded fallback (not random) |
+| Assistant NLU | Keyword/pattern intent classification + rule-based entity extraction |
+
+A trained model (Prophet/XGBoost/LSTM for forecasting, a CNN for quality grading) could be dropped in behind these same interfaces without an API/frontend rewrite — that swap has not happened yet.
+
+## Marketplace
+
+Real, server-validated CRUD: listings/lots, buyer offers, accept/reject with duplicate-action prevention, quantity/price validation against the listing's minimums. Buyer verification is a real submit → admin review → approve/reject workflow with an audit log, not a badge you can self-assign.
+
+## Transport / Net Realization
+
+Transport cost is modelled per trip: vehicle-class selection (mini pickup / LCV / medium truck), diesel price, driver cost, maintenance, vehicle overhead, tolls beyond a free radius, an empty return leg, and a minimum-trip floor — all labelled as tunable reference assumptions, not official tariffs. This is the *same* calculator used everywhere a transport figure appears (market comparison, buyer matching, AgriAdvisor, profit calculator, FarmPool, admin impact dashboard) — there is no second copy of this logic anywhere in the codebase.
+
+## FarmPool / Group Selling
+
+These are two different things, worth not conflating:
+
+- **FarmPool** (`/logistics/farmpool`) is a stateless calculator: it computes a real shared-cost split (using a real negotiated transporter price when one is linked, otherwise the transport estimate above), but the *other farmers* shown pooling with you are seeded/simulated profiles, not real matched users. The API returns `pool_partners_are_simulated: true` and the UI shows "Demo data — nearby farmer profiles shown here are simulated."
+- **Group Selling** (`/group-selling`) is a real, persisted `GroupSellingPool`/membership table. Its displayed "estimated price improvement %" is a simple formula off member count and pooled quantity, not a market-derived figure.
+
+## Multilingual / i18n
+
+15 languages are architected for (English, Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Assamese, Urdu, Bhojpuri, Maithili), but **actual UI-string coverage is uneven** — measured directly against the 1,455-key English baseline:
+
+| Coverage | Languages |
+|---|---|
+| 100% | English, Hindi, Bengali, Marathi |
+| 38.4% | Tamil |
+| 30.0% | Gujarati, Kannada, Telugu |
+| 21.2% | Malayalam |
+| ~19.2–19.3% | Odia, Assamese, Urdu, Bhojpuri, Maithili, Punjabi |
+
+Missing keys fall back to English automatically (never a crash, never a raw key in production), so a partially-translated language is still fully usable — just not fully translated. If you select one of the ~19–30% languages today, expect to see a meaningful amount of English mixed in.
+
+Speech-to-text is browser-dependent and marked reliable mainly for English/Hindi/Marathi/Bengali/Tamil/Telugu/Gujarati/Kannada/Malayalam/Punjabi/Urdu (`"device"`); Odia/Assamese/Bhojpuri/Maithili are marked `"unsupported"` for STT specifically. Freeform marketplace text (offer messages, notes) is preserved in its original language, not machine-translated.
+
+## Security
+
+- JWT (HS256) + bcrypt password hashing for farmer/buyer/transporter accounts.
+- Admin auth is a separate, environment-configured credential path, never hard-coded, never shipped in the frontend bundle.
+- If `SECRET_KEY` isn't set, a random one is generated at process startup (with a logged warning) rather than falling back to a known placeholder — tokens won't survive a restart in that case, which is acceptable for a demo but should be set explicitly for a stable deployment.
+- All request bodies validated via Pydantic schemas; marketplace offers specifically enforce positive price/quantity, quantity-vs-listing limits, and minimum-price rejection.
+- Public farmer/buyer endpoints return a PII-free schema; email/phone are only returned via the authenticated `/me` endpoint.
+- **Not present, and not claimed**: encryption-at-rest, rate limiting, formal penetration testing, GDPR/DPDP-specific compliance mechanisms, or any verifiable Row Level Security (Supabase RLS status can't be confirmed from this repository).
 
 ## Project Structure
 
 ```
-backend/
-  app/
-    routers/       26 route modules (auth, market, transport, payments, …)
-    services/      live_market_data, agmarknet_service, transport_optimizer,
-                   recommendation_engine, price_predictor, quality_grading, …
-    models.py      20 SQLAlchemy models
-    i18n/           server-side intent phrasing for the rule-based advisor
-  tests/           13 test files, 113 tests
-frontend/
-  src/
-    pages/         25 route-level pages
-    components/
-    i18n/
-      translations/  15 locale JSON files
-research paper and diagrams/   architecture diagrams, prior write-ups
-screenshots/                    real, dated app screenshots (see below)
+cropwise/
+├── backend/
+│   └── app/
+│       ├── routers/       # 30 FastAPI routers, one per feature area
+│       ├── services/      # 14 modules — recommendation_engine, price_predictor,
+│       │                  #   buyer_matcher, transport_optimizer, weather_service,
+│       │                  #   quality_grading, live_market_data, agmarknet_service, ...
+│       ├── i18n/           # backend NLU, intents, templates, crop/location terms
+│       ├── mock_data/      # seeded crops, markets, demo users, 60-day price history
+│       ├── models.py       # 28 SQLAlchemy models
+│       ├── database.py     # Postgres-only engine + additive migrations
+│       └── config.py
+│   └── tests/               # 22 files, 197 passing / 6 skipped
+├── frontend/
+│   └── src/
+│       ├── pages/           # 26 route-level page components
+│       ├── components/
+│       ├── i18n/            # I18nContext + per-language translation JSON
+│       ├── api/client.js    # 133-method API client
+│       └── context/         # Auth, Theme
+├── research paper and diagrams/   # SIH research paper + technical dossier + figures
+└── screenshots/
 ```
-
-## Implementation Status
-
-| Feature | Status | Evidence / Notes |
-|---|---|---|
-| Authentication | **Implemented** | JWT, bcrypt password hashing, farmer/buyer/admin roles (`auth.py`, `auth_utils.py`) |
-| Crop Prices / Market Intelligence | **Implemented (live) + Demo fallback** | Dual live source + honest LIVE/DEMO labelling; live fetch not exercised in this audit (network-restricted environment) |
-| Market Comparison / Net Realisation | **Implemented** | `market.py::compare_markets`, transport cost folded into the ranking |
-| Best Selling Option | **Implemented** | Built on the same comparison + `recommendation_engine.py` |
-| Transport cost model | **Implemented, realistic** | Vehicle-class/diesel-price/driver/toll model (`transport_optimizer.py`), not a flat rate |
-| Transporter accounts / quote negotiation | **Not implemented** | No transporter role exists in `auth_utils.py`; no quote/negotiation fields on `TransportRequest` in this snapshot |
-| FarmPool (shared transport) | **Implemented, demo-labelled** | Real cost-split math; nearby-farmer profiles are explicitly `pool_partners_are_simulated=True` |
-| Group Selling (FPO pooling) | **Implemented** | `group_selling.py` + `GroupSelling.jsx` |
-| Buyer discovery / matching | **Implemented** | `buyer_matcher.py`, `matching.py`, `buyer_demands.py` |
-| Buyer verification | **Implemented (platform-level)** | 5-state admin review workflow; explicitly **not** a government/eNAM verification |
-| AgriAdvisor | **Implemented, rule-based** | Multilingual intent engine over real backend data; not an LLM |
-| Ask Assistant | **Implemented, rule-based** | Same intent engine, chat-style UI |
-| Price Forecast | **Implemented, statistical** | Backtested accuracy reported in-app, not a trained ML model |
-| Quality grading | **Implemented, heuristic** | Real uploaded-image pixel/colour/texture analysis — not a trained CV model |
-| Payments | **Simulated (no real gateway)** | Backend is a PENDING→INITIATED→PAID tracker only. **The frontend has a "Pay Now" button that calls a Razorpay checkout flow and backend endpoints (`/payments/create-order`, `/payments/{id}/verify`) that do not exist in the backend** — this is a real, unresolved bug, not a design choice. See [Current Limitations](#current-limitations). |
-| Transactions / receipts | **Partially implemented** | Transaction lifecycle and history exist; no dedicated receipt/PDF or hash-verification endpoint was found in this snapshot |
-| Storage Marketplace | **Demo/mock** | Facilities are explicitly labelled `is_demo=True` |
-| Notifications | **Implemented** | Real, persisted per-user notifications (`notifications.py`) |
-| Grievances | **Implemented** | Farmer-raised grievance records with status tracking |
-| Weather | **Implemented (live) + Demo fallback** | Open-Meteo integration with a deterministic fallback when unavailable |
-| Admin dashboard | **Implemented** | Buyer verification review, user activity/login tracking |
-| i18n / Localisation | **Partially implemented** | See the dedicated section below — real infrastructure, incomplete coverage |
-
-## Backend
-
-- 26 FastAPI routers, 20 SQLAlchemy models, PostgreSQL-only in production
-  (there is no SQLite fallback in the app itself — `DATABASE_URL` must be a
-  real Postgres/Supabase instance, or the app refuses to start).
-- **113 backend tests, all passing** in this audit
-  (`DATABASE_URL="sqlite:///:memory:" pytest`, SQLite in-memory used only
-  for test isolation).
-- No ORM migration framework (no Alembic) — schema changes rely on
-  `create_all()` at startup plus a small hand-written "add column if
-  missing" helper for columns added after the database was first
-  provisioned.
-
-## Frontend
-
-- 25 route-level pages, React 18 + Vite + Tailwind, dark/light theme
-  support throughout.
-- `npm run build` **succeeds** (verified in this audit): ~921 KB main
-  bundle (236 KB gzipped) plus one lazy-loaded chunk per locale. Vite warns
-  about the >500 KB main chunk; this is a real, unaddressed
-  code-splitting opportunity, not a build error.
-- No frontend automated test suite is configured (no test script in
-  `package.json`).
-
-## i18n / Localisation
-
-CropWise supports 15 locales (`en, hi, mr, as, bho, bn, gu, kn, mai, ml,
-or, pa, ta, te, ur`) through a single flat-key JSON dictionary per locale
-with a graceful `locale → English → raw key` fallback chain, so a missing
-translation never breaks the page — it just displays in English.
-
-**Real, exact key counts from this audit** (English is the canonical key set):
-
-| Locale | Keys present | Coverage |
-|---|---:|---:|
-| en (English) | 1072 / 1072 | 100% |
-| hi (Hindi) | 445 / 1072 | ~41.5% |
-| mr (Marathi) | 245 / 1072 | ~22.9% |
-| as, bho, bn, gu, kn, mai, ml, or, pa, ta, te, ur (12 locales) | 157 / 1072 each | ~14.6% each |
-
-**Overall coverage across all 15 locales: ~22.7%** (3,646 of 16,080
-possible translated slots). Do not read this app as "multilingual" in the
-sense of every screen being fully translated in every language — English
-and, to a lesser extent, Hindi and Marathi are the only locales with
-meaningful depth today; the other 12 cover only core
-navigation/authentication strings. A screenshot in this repository
-(`Screenshot 2026-09-11 010111.png`) also shows a raw, untranslated
-`landing.journeyHeading`-style key rendered on screen at one point in
-development — evidence that key-lookup gaps have been a real, observed
-issue, not just a theoretical one. A later screenshot from the same session
-shows it fixed for that specific page.
-
-**What genuinely works:** the language selector, the fallback chain, and
-full-depth English/Hindi/Marathi on the main pages exercised in this audit.
-**What's incomplete:** deep translation for the other 12 locales, and a
-hardcoded-string sweep — a simple heuristic scan run as part of this audit
-(looking for plain JSX text not passed through `t()`) found **73 candidate
-lines across 6 files** (`AIAdvisor.jsx`, `AskAssistant.jsx`, `Landing.jsx`,
-`PriceForecast.jsx`, `ProfitCalculator.jsx`, `Layout.jsx`). Not every hit is
-a real gap — the scan also flags brand names, units, and statistical
-abbreviations (`MAE`, `RMSE`) that are legitimately left untranslated — but
-it indicates real remaining work, concentrated in `AIAdvisor.jsx`.
-
-## API / Integrations
-
-| Integration | Status |
-|---|---|
-| data.gov.in (mandi prices) | Implemented; live reachability not verified in this audit's network-restricted environment |
-| AGMARKNET via CEDA | Implemented as a secondary source, same caveat |
-| Open-Meteo (weather) | Implemented, free tier, no API key required |
-| Razorpay (payments) | **Not implemented on the backend** despite frontend code that assumes it exists (see Current Limitations) |
-| Any LLM/AI API | **Not used anywhere in this codebase** |
-
-## Database
-
-PostgreSQL (Supabase-hosted in the reference deployment). 20 tables covering
-users (farmers/buyers), crop listings and lots, buyer demands and offers,
-transactions, transport requests, storage bookings, group-selling pools,
-buyer verification, grievances, notifications, and market-price history.
-`backend/.env.example` documents the required connection variables; no real
-credentials are present in this repository.
-
-## Current Limitations
-
-- **Payment checkout is broken end-to-end.** `TransactionDetail.jsx`'s
-  buyer-facing "Pay Now" button loads the Razorpay Checkout script and
-  calls backend endpoints (`create-order`, `verify`, `cancel`, `failed`)
-  that do not exist anywhere in `backend/app/routers/payments.py`. The
-  actual working payment path is a simulated
-  initiate → confirm-received flow with no real gateway. This needs a real
-  fix (either wire up Razorpay server-side or remove the dead client code),
-  not a description change.
-- **No transporter role.** There is no way for an actual transporter to log
-  in, see requests, or submit a quote; transport cost is currently an
-  estimate only.
-- **i18n coverage is shallow outside English/Hindi/Marathi**, as detailed
-  above.
-- **Live market data reachability was not verified in this audit** — the
-  code path exists and is tested with mocked responses, but this pass ran
-  in a network-restricted sandbox and could not confirm a real government
-  API response end-to-end.
-- **No receipts, PDF export, or hash-based integrity verification** was
-  found for transactions in this snapshot.
-- **No ORM migration tool (Alembic)** — schema evolution is handled by a
-  bespoke "add column if missing" helper, which works but doesn't track
-  history the way a real migration tool would.
-
-## What Is Left
-
-### Remaining for MVP
-- Fix or remove the broken Razorpay checkout path.
-- Decide on and build (or explicitly drop) transporter accounts and
-  quote/negotiation, since transport cost is currently an estimate only.
-- Verify live market-data ingestion against the real data.gov.in/CEDA APIs
-  from a network-unrestricted environment.
-
-### Important Improvements
-- Frontend automated tests (none exist today).
-- Code-splitting the frontend's >500 KB main bundle.
-- A real migration tool instead of the hand-rolled column-adding helper.
-- A systematic hardcoded-string sweep and deeper translation pass for the
-  9 shallow-coverage locales.
-
-### Future Features
-- Receipts / exportable transaction documents.
-- A genuine transporter marketplace (accounts, ratings, negotiation).
-- Background/scheduled market-data ingestion rather than on-demand fetch.
 
 ## Screenshots
 
-<p align="center">
-  <img src="screenshots/Screenshot%202026-09-07%20225620.png" width="49%" alt="CropWise landing page, light theme" />
-  <img src="screenshots/Screenshot%202026-09-11%20010200.png" width="49%" alt="CropWise landing page, dark theme" />
-</p>
-
 ### Desktop / Laptop
 
-<table>
-<tr>
-<td align="center" width="50%">
-<img src="screenshots/Screenshot%202026-09-13%20132443.png" width="100%" alt="Farmer dashboard with Best Selling Opportunity" /><br/>
-<sub><b>Farmer Dashboard — Best Selling Opportunity</b></sub>
-</td>
-<td align="center" width="50%">
-<img src="screenshots/Screenshot%202026-09-09%20091208.png" width="100%" alt="Farmer dashboard in Marathi" /><br/>
-<sub><b>Farmer Dashboard (Marathi)</b></sub>
-</td>
-</tr>
-<tr>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-07%20225932.png" width="100%" alt="Price forecast page" /><br/>
-<sub><b>Price Forecast</b></sub>
-</td>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-07%20225952.png" width="100%" alt="Profit calculator page" /><br/>
-<sub><b>Profit Calculator</b></sub>
-</td>
-</tr>
-<tr>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-13%20152347.png" width="100%" alt="FarmPool shared transport page" /><br/>
-<sub><b>FarmPool (shared transport)</b></sub>
-</td>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-07%20230030.png" width="100%" alt="Storage marketplace page" /><br/>
-<sub><b>Storage Marketplace</b></sub>
-</td>
-</tr>
-</table>
+| | |
+|---|---|
+| ![Landing](screenshots/Screenshot%202026-09-07%20225620.png) | ![Farmer Dashboard — Best Selling Opportunity](screenshots/Screenshot%202026-09-13%20132443.png) |
+| Landing page | Farmer Dashboard — recommendation with net realization |
+| ![Price Forecast](screenshots/Screenshot%202026-09-07%20225932.png) | ![Profit Calculator](screenshots/Screenshot%202026-09-07%20225952.png) |
+| Price Forecast — honest DEMO SIMULATION label | Profit Calculator — side-by-side net profit |
+| ![FarmPool](screenshots/Screenshot%202026-09-13%20152347.png) | ![Storage Marketplace](screenshots/Screenshot%202026-09-07%20230030.png) |
+| FarmPool — real cost split, disclosed simulated partners | Storage Marketplace — disclosed demo facilities |
 
-### Tablet
+### Tablet / iPad
 
-<table>
-<tr>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-07%20232042.png" width="100%" alt="Buyer demands list, tablet width" /><br/>
-<sub><b>Buyer Demands</b></sub>
-</td>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-07%20232143.png" width="100%" alt="Global Farm Assistant, tablet width" /><br/>
-<sub><b>Global Farm Assistant</b></sub>
-</td>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-13%20152910.png" width="100%" alt="Group Selling, tablet width" /><br/>
-<sub><b>Group Selling</b></sub>
-</td>
-<td align="center">
-<img src="screenshots/Screenshot%202026-09-13%20153534.png" width="100%" alt="Transport coordination, tablet width" /><br/>
-<sub><b>Transport Coordination</b></sub>
-</td>
-</tr>
-</table>
+| | |
+|---|---|
+| ![Farmer Dashboard tablet](screenshots/Screenshot%202026-09-13%20121603.png) | ![Buyer Demands tablet](screenshots/Screenshot%202026-09-07%20232042.png) |
+| Farmer Dashboard | Buyer Demands |
 
 ### Mobile
 
-<p align="center">
-  <img src="screenshots/Screenshot%202026-09-07%20231838.png" width="200" alt="Selling journey on mobile" />
-  &nbsp;&nbsp;
-  <img src="screenshots/Screenshot%202026-09-07%20231904.png" width="200" alt="Farmer dashboard on mobile" />
-</p>
-<p align="center"><sub><b>Selling Journey</b> &nbsp;·&nbsp; <b>Mobile Dashboard</b></sub></p>
+| | |
+|---|---|
+| ![Selling journey mobile](screenshots/Screenshot%202026-09-07%20231838.png) | ![Weather widget mobile](screenshots/Screenshot%202026-09-07%20231904.png) |
+| Selling journey tracker | Weather — honest DEMO WEATHER label |
 
-More screenshots are available in [`screenshots/`](screenshots/), including
-the registration screen and a couple of in-progress development captures
-kept for historical/audit purposes.
+### Core Product Flows
 
-## Installation
+| | |
+|---|---|
+| ![Register with demo accounts](screenshots/Screenshot%202026-09-07%20225701.png) | ![Buyer Dashboard in Hindi](screenshots/Screenshot%202026-09-09%20090320.png) |
+| Registration — instant demo accounts | Buyer Dashboard rendered in Hindi (100%-coverage language) |
 
-### Prerequisites
-- Python 3.11+, Node.js 18+, a PostgreSQL database (Supabase works well for
-  a free hosted instance).
+## API / Integrations
 
-### Backend
+- **data.gov.in** — "Current Daily Price of Various Commodities" + "Variety-wise Daily Market Prices" resources. Implemented; live reachability unverified (see [Market Data](#market-data)).
+- **Open-Meteo** — free-tier weather forecast API, no key required. Implemented; live reachability unverified in this audit's environment.
+- **CEDA/AGMARKNET** — supported as an optional second live source via `CEDA_API_KEY`; same unverified-live caveat applies.
+
+## Implementation Status
+
+See the full feature-by-feature table and percentage breakdown in this audit's PART 1 (shared alongside this README). Headline numbers: 30 backend routers, 28 database models, 26 frontend pages, 197 passing automated tests, 4-of-15 languages at ~100% UI coverage.
+
+## Current Limitations
+
+- Live external data (data.gov.in, Open-Meteo, CEDA) implemented but never confirmed working against the real internet.
+- No trained ML/LLM anywhere — everything "intelligent" is rules or statistics, by design.
+- No real payment gateway — payments are explicitly simulated end-to-end.
+- 11 of 15 languages are 19–38% translated at the UI-string level.
+- Supabase is used purely as Postgres hosting — no RLS, Auth, or Storage integration, and RLS status can't be verified from this repo.
+- No formal load testing, penetration testing, or real-farmer/buyer pilot has been conducted.
+- FarmPool's pooled farmers and Storage's facilities are simulated demo data (clearly labelled in-app).
+
+## Future Implementation
+
+### AI / ML
+- Trained price-forecasting model (Prophet / XGBoost / LSTM) behind the existing `price_predictor.py` interface.
+- Trained computer-vision model for quality grading, behind the existing `quality_grading.py` interface, paired with real image storage.
+- Hybrid recommendation/matching logic that retains explainability while incorporating learned components as real usage data accumulates.
+
+### Data & Market Intelligence
+- Verify and confirm the live data.gov.in / CEDA / Open-Meteo paths against a deployment with real internet access.
+- Expand seeded coverage beyond the current 10 crops / 20 markets (Chhattisgarh + Maharashtra).
+
+### Location / Maps
+- Live GPS/location capture (currently location is manually entered/profile-based, not device GPS).
+
+### Payments / Transactions
+- Real payment gateway integration to replace the current fully-simulated payment flow.
+
+### Multilingual / Voice
+- Bring the remaining 11 languages up from 19–38% to full UI coverage.
+- Extend reliable STT beyond the currently-supported language set.
+- Real machine-translation of freeform marketplace text across languages.
+
+### Scalability / Infrastructure
+- Row Level Security policies and/or Supabase Auth, if moving beyond custom JWT.
+- Formal migration tooling (Alembic) in place of the current additive hand-written migration function.
+- Connection pooling, backup strategy, and a persistent-storage plan appropriate for a non-free hosting tier.
+
+### Testing / Production Hardening
+- Load testing, penetration testing, rate limiting, encryption-at-rest.
+- Broader automated coverage as new routers are added.
+
+### Other Product Features
+- A structured usability study / real pilot with farmer and buyer cooperatives.
+- Group Selling's price-improvement estimate moved from a formula to a market-derived calculation.
+
+## Local Development
+
+**Backend**
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env   # fill in DATABASE_URL and SECRET_KEY
-uvicorn app.main:app --reload --port 8000
+cp .env.example .env   # set DATABASE_URL to your own Postgres/Supabase connection string
+uvicorn app.main:app --reload
 ```
 
-### Frontend
+**Frontend**
 ```bash
 cd frontend
 npm install
-cp .env.example .env   # point VITE_API_URL at your backend
 npm run dev
+```
+
+**Tests**
+```bash
+cd backend
+python -m pytest tests/ -q
 ```
 
 ## Environment Variables
 
-See `backend/.env.example` and `frontend/.env.example` for the full list.
-At minimum, the backend needs `DATABASE_URL` (PostgreSQL) and `SECRET_KEY`
-(JWT signing); no real secrets are committed to this repository.
-
-## Running Locally
-
-1. Start the backend (`uvicorn`, above) — it creates its own tables on
-   first run against an empty database.
-2. Start the frontend (`npm run dev`).
-3. Register a farmer and a buyer account, or use any demo accounts your
-   deployment has seeded, and walk the flow described in
-   [How CropWise Works](#how-cropwise-works).
+See `backend/.env.example` for the full, documented list (secret key, database URL, admin credentials, market-data API keys). No real secrets are committed anywhere in this repository — all example values are explicitly-labelled placeholders.
 
 ## Deployment
 
-The reference deployment (referenced in in-app copy and screenshots) runs
-the frontend on Vercel and the backend on a Postgres/Supabase-backed host;
-no deployment configuration files specific to a provider were found in this
-repository snapshot, so deployment steps are environment-dependent rather
-than one-command.
+- **Frontend**: Vercel — https://cropwise-alpha.vercel.app
+- **Backend**: Render — https://cropwise-backend-o21s.onrender.com (free tier; expect a cold-start delay after idling)
+- **Database**: PostgreSQL, Supabase-hosted
 
+## Research & Technical Documentation
 
----
+Both documents are in [`research paper and diagrams/`](research%20paper%20and%20diagrams/):
+- `CropWise_Research_Paper_1.docx` — SIH-format research paper (PS-26132)
+- `CropWise_Technical_Dossier_Final.docx` / `.pdf` — engineering-oriented companion document
 
+**Note**: both documents were accurate at an earlier point in this project's development but have not been fully updated since — most notably, both still describe or partially describe a SQLite-based architecture that the codebase has since replaced with PostgreSQL/Supabase, and several "future scope" items in both documents (live weather integration, realistic transport-cost modelling, the data.gov.in filter fix, a broader test suite) have since been implemented. Treat this README, not either document, as the current source of truth on system state.
+
+## Project Links
+
+- **Live app**: https://cropwise-alpha.vercel.app
+- **Live API**: https://cropwise-backend-o21s.onrender.com
+- **Repository**: https://github.com/Abha153/cropwise
+- **Problem Statement**: SIH 2026 PS-26132 — Strengthening Market Linkages and Price Discovery for Farmers
