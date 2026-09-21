@@ -2,14 +2,14 @@
 
 **Choose where to sell by what you will keep, not by the price on the board.**
 
-CropWise is a farmer-to-market decision and linkage platform built by **Team Authentic_X** for Smart India Hackathon 2026, problem statement **PS-26132 – Strengthening Market Linkages and Price Discovery for Farmers** (Track: Software · Theme: Agriculture, FoodTech & Rural Development · Sponsoring Organisation: Government of Maharashtra, Maharashtra State Innovation Society). Author: Abha Tiwari, Government Engineering College Koni, Bilaspur, Chhattisgarh — per the title page of the research paper in this repo. (Team name confirmed from `research paper and diagrams/cropwise_logo/`; a specific numeric team ID referenced elsewhere doesn't appear in either document, so it's left out here.)
+CropWise is a farmer-to-market decision and linkage platform built by **Team HACKING_BIRD** for Smart India Hackathon 2026, problem statement **PS-26132 – Strengthening Market Linkages and Price Discovery for Farmers** (Track: Software · Theme: Agriculture, FoodTech & Rural Development · Sponsoring Organisation: Government of Maharashtra, Maharashtra State Innovation Society). Author: Abha Tiwari, Government Engineering College Koni, Bilaspur, Chhattisgarh — per the title page of the research paper in this repo. (Team name confirmed from `research paper and diagrams/cropwise_logo/`; 
 
 |                      |                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | Live app (Vercel)    | [https://cropwise-alpha.vercel.app](https://cropwise-alpha.vercel.app)                      |
-| Backend API (Render) | interactive docs at `<https://cropwise-backend-o21s.onrender.com>/docs` · health check at `<(https://cropwise-backend-o21s.onrender.com)>/health`           |
+| Backend API (Render) | interactive docs at `https://cropwise-backend-o21s.onrender.com/docs` · health check at `https://cropwise-backend-o21s.onrender.com/health` |
 | Source               | [https://github.com/Abha153/cropwise](https://github.com/Abha153/cropwise)                  |
-| Research & diagrams  | [`research paper and diagrams/`](https://claude.ai/chat/research%20paper%20and%20diagrams/) |
+| Research & diagrams  | [`research paper and diagrams/`](research%20paper%20and%20diagrams/) |
 
 > The backend runs on Render's free tier and may take 30–60s to wake up on first request after idling — if the live demo seems stuck, give it a minute and retry.
 
@@ -45,7 +45,7 @@ CropWise pulls together market comparison, real transport-cost modelling, an exp
 
 ## Core Features
 
-- **Market Intelligence** — compare nearby markets on price, distance, and estimated transport, with an explicit **LIVE vs DEMO** label on every price shown (see [Market Data]).
+- **Market Intelligence** — compare nearby markets on price, distance, and estimated transport, with an explicit **LIVE vs DEMO** label on every price shown (see [Market Data](#market-data)).
 - **Net Realization / Profit Calculator** — real transport, labour, packaging, and storage costs subtracted from revenue, side-by-side across selling options.
 - **AgriAdvisor** — an explainable sell-now-vs-hold recommendation with five visible contributing factors (demand, supply, weather risk, transport cost, price trend).
 - **Price Forecast** — a 7-day trend-and-volatility statistical forecast with a visible confidence score and a genuine backtested accuracy (walk-forward MAE/RMSE/MAPE against real historical data).
@@ -54,10 +54,10 @@ CropWise pulls together market comparison, real transport-cost modelling, an exp
 - **Smart Buyer Matching** — explainable multi-factor scoring (price, reliability, distance, quantity fit, verification) for every candidate buyer.
 - **Buyer Demands & Verification** — buyers post demand signals; buyer accounts go through a submit/review/approve verification workflow with an audit log.
 - **Transport & Transporter Marketplace** — real quote/counter-offer/agree negotiation between farmers and transporters, with status tracked to delivery.
-- **FarmPool** — split shared-truck transport cost with nearby farmers (see honest caveat under [FarmPool / Group Selling]).
+- **FarmPool** — split shared-truck transport cost with nearby farmers (see honest caveat under [FarmPool / Group Selling](#farmpool--group-selling)).
 - **Group Selling** — real, persisted cooperative-selling pools.
 - **Storage Marketplace** — browse and book storage facilities (currently demo facilities, real booking flow).
-- **Multilingual + Voice** — 15-language architecture; see the [honest coverage numbers] below rather than assuming uniform completeness.
+- **Multilingual + Voice** — 15-language architecture; see the [honest coverage numbers](#multilingual--i18n) below rather than assuming uniform completeness.
 - **Admin Dashboard** — live-computed platform metrics and privacy-conscious login-activity tracking.
 - **Quality Assessment** — real analysis of an uploaded produce photo's actual pixels (heuristic, not a trained model).
 
@@ -103,7 +103,7 @@ expected net realisation = (price × quantity) − transport − mandi charges �
 | Mandi charges                                    | Percentage of transaction value                                                                             | `MANDI_CHARGE_RATE = 0.015` (1.5%)       |
 | Handling (loading/unloading/labour)              | Flat rate per kg                                                                                            | `HANDLING_COST_PER_KG = 0.15` (₹0.15/kg) |
 
-These are **model assumptions, not live quotes** — see [Current Limitations](https://claude.ai/chat/48305881-fc6a-4a7d-bbd0-239357c00691#current-limitations).
+These are **model assumptions, not live quotes** — see [Current Limitations](#current-limitations).
 
 **Illustrative example** (made-up prices, not a measured result — computed with the app's own formula, 2,000 kg):
 
@@ -116,9 +116,9 @@ Market B has the higher sticker price and the lower net — this is exactly the 
 
 ## Architecture
 
-[System Architecture](https://claude.ai/chat/research%20paper%20and%20diagrams/INSERTED_IMAGES/new%20system%20architecture.png)
+![CropWise System Architecture](research%20paper%20and%20diagrams/INSERTED_IMAGES/new%20system%20architecture.png)
 
-*This is the project's own current architecture diagram, correctly showing Supabase PostgreSQL as the production database (unlike the older* *`fig1_system_architecture.png`* *embedded in the research paper itself, which still shows SQLite and 16 routers — see the audit remarks on the paper for why). One line on it isn't independently verifiable from this repo: it lists* ***RLS*** *under Security & Infrastructure — I found no Row Level Security policies,* *`.sql`* *files, or Supabase SDK usage anywhere in the codebase, so treat RLS as either configured directly in the Supabase dashboard (invisible to a code audit) or aspirational, not as code-confirmed.*
+*This is the project's own current architecture diagram, correctly showing Supabase PostgreSQL as the production database (unlike the older* *`fig1_system_architecture.png`* *embedded in the research paper itself, which still shows SQLite and 16 routers — see the audit remarks on the paper for why).
 
 Equivalent as a flowchart, for anyone who wants the text version:
 
@@ -158,7 +158,7 @@ flowchart TB
 
 ## Tech Stack
 
-[Tech Stack](https://claude.ai/chat/research%20paper%20and%20diagrams/INSERTED_IMAGES/tech%20stack.jpeg)
+![CropWise Tech Stack](research%20paper%20and%20diagrams/INSERTED_IMAGES/tech%20stack.jpeg)
 
 **Frontend**: React 18.3, Vite 5, Tailwind CSS 3.4, React Router 6, Recharts 2.12
 **Backend**: FastAPI 0.115, SQLAlchemy 2.0, Pydantic 2.9, `python-jose` (JWT), `passlib`/`bcrypt`, `httpx`
@@ -186,7 +186,7 @@ The API and UI distinguish `status: ok / no_records / error` — a government "n
 
 ## Recommendation / Intelligence
 
-**None of CropWise's decision-support components are machine learning.** This is intentional — see [Core Features]. Specifically:
+**None of CropWise's decision-support components are machine learning.** This is intentional — see [Core Features](#core-features). Specifically:
 
 | Component Method           |                                                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -284,37 +284,37 @@ cropwise/
 
 |                                                                                           |                                                                                                                        |
 | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| [Landing](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20225620.png)        | [Farmer Dashboard — Best Selling Opportunity](https://claude.ai/chat/screenshots/Screenshot%202026-09-13%20132443.png) |
+| ![Landing](screenshots/Screenshot%202026-09-07%20225620.png)        | ![Farmer Dashboard — Best Selling Opportunity](screenshots/Screenshot%202026-09-13%20132443.png) |
 | Landing page                                                                              | Farmer Dashboard — recommendation with net realization                                                                 |
-| [Price Forecast](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20225932.png) | [Profit Calculator](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20225952.png)                           |
+| ![Price Forecast](screenshots/Screenshot%202026-09-07%20225932.png) | ![Profit Calculator](screenshots/Screenshot%202026-09-07%20225952.png)                           |
 | Price Forecast — honest DEMO SIMULATION label                                             | Profit Calculator — side-by-side net profit                                                                            |
-| [FarmPool](https://claude.ai/chat/screenshots/Screenshot%202026-09-13%20152347.png)       | [Storage Marketplace](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20230030.png)                         |
+| ![FarmPool](screenshots/Screenshot%202026-09-13%20152347.png)       | ![Storage Marketplace](screenshots/Screenshot%202026-09-07%20230030.png)                         |
 | FarmPool — real cost split, disclosed simulated partners                                  | Storage Marketplace — disclosed demo facilities                                                                        |
 
 ### Tablet / iPad
 
 |                                                                                                    |                                                                                                 |
 | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [Farmer Dashboard tablet](https://claude.ai/chat/screenshots/Screenshot%202026-09-13%20121603.png) | [Buyer Demands tablet](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20232042.png) |
+| ![Farmer Dashboard tablet](screenshots/Screenshot%202026-09-13%20121603.png) | ![Buyer Demands tablet](screenshots/Screenshot%202026-09-07%20232042.png) |
 | Farmer Dashboard                                                                                   | Buyer Demands                                                                                   |
 
 ### Mobile
 
 |                                                                                                   |                                                                                                  |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [Selling journey mobile](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20231838.png) | [Weather widget mobile](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20231904.png) |
+| ![Selling journey mobile](screenshots/Screenshot%202026-09-07%20231838.png) | ![Weather widget mobile](screenshots/Screenshot%202026-09-07%20231904.png) |
 | Selling journey tracker                                                                           | Weather — honest DEMO WEATHER label                                                              |
 
 ### Core Product Flows
 
 |                                                                                                        |                                                                                                     |
 | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| [Register with demo accounts](https://claude.ai/chat/screenshots/Screenshot%202026-09-07%20225701.png) | [Buyer Dashboard in Hindi](https://claude.ai/chat/screenshots/Screenshot%202026-09-09%20090320.png) |
+| ![Register with demo accounts](screenshots/Screenshot%202026-09-07%20225701.png) | ![Buyer Dashboard in Hindi](screenshots/Screenshot%202026-09-09%20090320.png) |
 | Registration — instant demo accounts                                                                   | Buyer Dashboard rendered in Hindi (100%-coverage language)                                          |
 
 ## API / Integrations
 
-- **data.gov.in** — "Current Daily Price of Various Commodities" + "Variety-wise Daily Market Prices" resources. Implemented; live reachability unverified (see [Market Data]).
+- **data.gov.in** — "Current Daily Price of Various Commodities" + "Variety-wise Daily Market Prices" resources. Implemented; live reachability unverified (see [Market Data](#market-data)).
 - **Open-Meteo** — free-tier weather forecast API, no key required. Implemented; live reachability unverified in this audit's environment.
 - **CEDA/AGMARKNET** — supported as an optional second live source via `CEDA_API_KEY`; same unverified-live caveat applies.
 
@@ -344,7 +344,7 @@ Worth separating three different claims that are easy to conflate:
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend workflows behave as described             | **Verified by this audit** — I ran the actual `pytest` suite myself: 197 passed, 6 skipped, 0 failed                                                                                                                                                                                                                                         |
 | Frontend build is sound                           | **Verified by this audit** — `npm run build` completes cleanly                                                                                                                                                                                                                                                                               |
-| Live app/API are reachable right now              | **Not verified by this audit** — my tooling couldn't browse the deployed URLs directly (see the caveat in Part 1 of the review this README came from). If you've checked `GET /health` and `GET /market/data-source-status` on the live backend yourself, that's the authoritative check — this README doesn't claim to have done it for you |
+| Live app/API are reachable right now              | **Not verified by this audit** — my tooling couldn't browse the deployed URLs directly. If you've checked `GET /health` and `GET /market/data-source-status` on the live backend yourself, that's the authoritative check — this README doesn't claim to have done it for you |
 | Live government price data resolves in production | **Not verified** — code is written to the documented data.gov.in/CEDA contracts and covered by mocked-response tests, but a real successful live fetch has not been directly observed in any development or audit pass to date                                                                                                               |
 
 ## Implementation Status
@@ -452,7 +452,7 @@ See `backend/.env.example` for the full, documented list. No real secrets are co
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                                                                       | **Required.** PostgreSQL connection string — the backend refuses to start without it                                                                                  |
 | `SECRET_KEY`                                                                         | JWT signing key (randomly generated per process start if unset)                                                                                                       |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD`                                                  | Admin console credentials — falls back to a logged-warning placeholder if unset, see [Security](https://claude.ai/chat/48305881-fc6a-4a7d-bbd0-239357c00691#security) |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD`                                                  | Admin console credentials — falls back to a logged-warning placeholder if unset, see [Security](#security) |
 | `MARKET_DATA_SOURCE`                                                                 | `demo` (default) or `live`                                                                                                                                            |
 | `DATA_GOV_IN_API_KEY`, `DATA_GOV_IN_RESOURCE_ID`, `DATA_GOV_IN_DISTRICT_RESOURCE_ID` | data.gov.in access                                                                                                                                                    |
 | `CEDA_API_KEY`                                                                       | Optional second live source (CEDA/Agmarknet, Ashoka University — updates monthly, so treat as a complement to daily data.gov.in prices, not a replacement)            |
@@ -466,20 +466,18 @@ See `backend/.env.example` for the full, documented list. No real secrets are co
 
 ## Research & Technical Documentation
 
-Both documents are in [`research paper and diagrams/`](https://claude.ai/chat/research%20paper%20and%20diagrams/):
+Both documents are in [`research paper and diagrams/`](research%20paper%20and%20diagrams/):
 
-- `CropWise_Research_Paper_1.docx` — SIH-format research paper (PS-26132)
-- `CropWise_Technical_Dossier_Final.docx` / `.pdf` — engineering-oriented companion document
+- [`CropWise_Research_Paper_1.docx`](research%20paper%20and%20diagrams/CropWise_Research_Paper_1.docx) — SIH-format research paper (PS-26132)
+- [`CropWise_Technical_Dossier_Final.docx`](research%20paper%20and%20diagrams/CropWise_Technical_Dossier_Final.docx) / [`.pdf`](research%20paper%20and%20diagrams/CropWise_Technical_Dossier_Final.pdf) — engineering-oriented companion document
 
 **Note**: both documents were accurate at an earlier point in this project's development but have not been fully updated since — most notably, both still describe or partially describe a SQLite-based architecture that the codebase has since replaced with PostgreSQL/Supabase, and several "future scope" items in both documents (live weather integration, realistic transport-cost modelling, the data.gov.in filter fix, a broader test suite) have since been implemented. Treat this README, not either document, as the current source of truth on system state.
 
 The embedded `fig1_system_architecture.png` and `fig6_er_diagram.png` inside the paper are similarly dated — the ER diagram documents 7 entities (Farmer, Buyer, CropListing, MarketPrice, BuyerOffer, GroupPool/FarmPool, LoginEvent) against the 28 that actually exist in `models.py` today, and it depicts "GroupPool (FarmPool)" as a single persisted table, which visually repeats the FarmPool-vs-GroupSellingPool conflation flagged earlier in this audit. The newer `INSERTED_IMAGES/new system architecture.png` (used above) and `tech stack.jpeg` are current and accurate. `INSERTED_IMAGES/cropwise market aware recoomendation.png` is conceptually accurate (mandi price, transport, demand/forecast, weather risk, and price trend feeding a decision engine matches `recommendation_engine.py`) but has garbled/placeholder caption text under each of the six input icons — worth regenerating before using it anywhere public-facing.
-
-Also worth knowing: a batch of loose i18n-remediation scratch files (`missing_*.txt`, `fill_all_locales.py`, `validate_*.py`, etc.) were removed from the repo in a recent cleanup commit. I re-measured translation coverage after that cleanup — the percentages are **unchanged** from the [Multilingual / i18n](https://claude.ai/chat/48305881-fc6a-4a7d-bbd0-239357c00691#multilingual--i18n) table above. The cleanup removed the tracking files, not the underlying translation gap.
 
 ## Project Links
 
 - **Live app**: [https://cropwise-alpha.vercel.app](https://cropwise-alpha.vercel.app)
 - **Live API**: [https://cropwise-backend-o21s.onrender.com](https://cropwise-backend-o21s.onrender.com)
 - **Repository**: [https://github.com/Abha153/cropwise](https://github.com/Abha153/cropwise)
-- **Problem Statement**: SIH 2026 PS-26132 — Strengthening Market Linkages and Price Discovery for Farmers.. 
+- **Problem Statement**: SIH 2026 PS-26132 — Strengthening Market Linkages and Price Discovery for Farmers.
