@@ -481,3 +481,29 @@ The embedded `fig1_system_architecture.png` and `fig6_er_diagram.png` inside the
 - **Live API**: [https://cropwise-backend-o21s.onrender.com](https://cropwise-backend-o21s.onrender.com)
 - **Repository**: [https://github.com/Abha153/cropwise](https://github.com/Abha153/cropwise)
 - **Problem Statement**: SIH 2026 PS-26132 — Strengthening Market Linkages and Price Discovery for Farmers.
+
+```mermaid
+flowchart LR
+    subgraph AWS["AWS us-east-1 / production"]
+        direction LR
+
+        GE["<b>Global Edge</b><br/>CDN + WAF"]
+        GW["<b>API Gateway</b><br/>:443"]
+
+        subgraph PAN["private application network"]
+            direction TB
+            
+            subgraph AZ_A["private subnet"]
+                AZA_Pods["<b>API Pods / AZ-a</b>"]
+            end
+
+            subgraph AZ_B["private subnet"]
+                AZB_Pods["<b>API Pods / AZ-b</b>"]
+            end
+        end
+
+        GE -->|TLS| GW
+        GW -->|VPC route| AZA_Pods
+        GW -->|VPC route| AZB_Pods
+    end
+```
