@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.auth_utils import require_buyer, require_farmer
+from app.services import offer_negotiation as neg
+from app.routers.notifications import send_farmer_notification, send_buyer_notification
 
 router = APIRouter(prefix="/offers", tags=["offers"])
 
@@ -78,8 +80,13 @@ def create_offer(payload: schemas.OfferCreate, buyer: models.Buyer = Depends(req
         lot.status = "UNDER_OFFER"
 
     db.add(offer)
+    db.flush()
+    # Round 1 of the negotiation thread: buyer -> farmer (owner of the target).
+    owner_id = (listing.farmer_id if payload.listing_id else lot.farmer_id)
+    neg.create_first_round(db, offer, owner_id)
     db.commit()
     db.refresh(offer)
+    neg.annotate_offers(db, [offer])
     return offer
 
 
@@ -97,7 +104,7 @@ def offers_for_listing(listing_id: int, farmer: models.Farmer = Depends(require_
         .order_by(models.BuyerOffer.offered_price_per_kg.desc())
         .all()
     )
-    return offers
+    return neg.annotate_offers(db, offers)
 
 
 @router.get("/lot/{lot_id}", response_model=List[schemas.OfferOut])
@@ -114,148 +121,66 @@ def offers_for_lot(lot_id: int, farmer: models.Farmer = Depends(require_farmer),
         .order_by(models.BuyerOffer.offered_price_per_kg.desc())
         .all()
     )
-    return offers
+    return neg.annotate_offers(db, offers)
 
 
 @router.get("/mine", response_model=List[schemas.OfferOut])
 def my_offers(buyer: models.Buyer = Depends(require_buyer), db: Session = Depends(get_db)):
-    return (
+    return neg.annotate_offers(db, (
         db.query(models.BuyerOffer)
         .filter(models.BuyerOffer.buyer_id == buyer.id)
         .order_by(models.BuyerOffer.created_at.desc())
         .all()
-    )
+    ))
+
+
+def _farmer_owned_target(offer, farmer, db, verb):
+    """Legacy ownership check (403 + legacy messages) for the farmer PATCH endpoints."""
+    kind, target = neg.load_target(db, offer)
+    noun = "listings" if offer.listing_id else "lots"
+    if not target or target.farmer_id != farmer.id:
+        raise HTTPException(status_code=403, detail=f"You can only {verb} offers on your own {noun}")
+    return kind, target
 
 
 @router.patch("/{offer_id}/accept")
 def accept_offer(offer_id: int, farmer: models.Farmer = Depends(require_farmer),
-                  db: Session = Depends(get_db)):
-    offer = db.query(models.BuyerOffer).filter(models.BuyerOffer.id == offer_id).first()
+                 db: Session = Depends(get_db)):
+    """Legacy farmer accept (path/behaviour preserved). Turn-aware: if the
+    buyer currently holds the move (farmer countered), the farmer cannot
+    accept their own counter. All acceptance goes through the shared
+    finalize_acceptance() routine."""
+    offer = (db.query(models.BuyerOffer).filter(models.BuyerOffer.id == offer_id)
+             .with_for_update().first())
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
     if offer.status != "pending":
         raise HTTPException(status_code=400, detail=f"This offer is already {offer.status} and cannot be changed")
-
-    if offer.listing_id:
-        listing = db.query(models.CropListing).filter(models.CropListing.id == offer.listing_id).first()
-        if not listing or listing.farmer_id != farmer.id:
-            raise HTTPException(status_code=403, detail="You can only accept offers on your own listings")
-        if listing.status != "active":
-            raise HTTPException(status_code=400, detail="This listing is no longer active")
-        if offer.quantity_kg > listing.quantity_kg:
-            raise HTTPException(status_code=400, detail="Offer quantity exceeds the remaining listing quantity")
-
-        listing.quantity_kg = round(listing.quantity_kg - offer.quantity_kg, 2)
-        listing.status = "sold" if listing.quantity_kg <= 0 else "active"
-        others = []
-        if listing.status == "sold":
-            others = (
-                db.query(models.BuyerOffer)
-                .filter(models.BuyerOffer.listing_id == listing.id, models.BuyerOffer.id != offer.id,
-                        models.BuyerOffer.status == "pending")
-                .all()
-            )
-        market_used = listing.location
-        lot_id = None
-    else:
-        lot = db.query(models.Lot).filter(models.Lot.id == offer.lot_id).first()
-        if not lot or lot.farmer_id != farmer.id:
-            raise HTTPException(status_code=403, detail="You can only accept offers on your own lots")
-        if lot.status not in ("AVAILABLE", "UNDER_OFFER"):
-            raise HTTPException(status_code=400, detail=f"This lot is {lot.status} and cannot be sold")
-
-        if offer.quantity_kg > lot.quantity_kg:
-            raise HTTPException(status_code=400, detail="Offer quantity exceeds the remaining lot quantity")
-
-        lot.quantity_kg = round(lot.quantity_kg - offer.quantity_kg, 2)
-        lot.status = "SOLD" if lot.quantity_kg <= 0 else "AVAILABLE"
-        others = []
-        if lot.status == "SOLD":
-            others = (
-                db.query(models.BuyerOffer)
-                .filter(models.BuyerOffer.lot_id == lot.id, models.BuyerOffer.id != offer.id,
-                        models.BuyerOffer.status == "pending")
-                .all()
-            )
-        market_used = lot.location
-        lot_id = lot.id
-
-        # Close out the buyer demand this offer was fulfilling, if any.
-        if offer.buyer_demand_id:
-            demand = db.query(models.BuyerDemand).filter(
-                models.BuyerDemand.id == offer.buyer_demand_id
-            ).first()
-            if demand and demand.status not in ("FULFILLED", "CANCELLED", "EXPIRED"):
-                demand.status = "FULFILLED"
-
-    offer.status = "accepted"
-    # reject other pending offers on the same lot/listing
-    for o in others:
-        o.status = "rejected"
-        if o.lot_id:
-            pass  # lot already reassigned to SOLD; nothing further to revert
-
-    transaction = models.Transaction(
-        listing_id=offer.listing_id,
-        lot_id=lot_id,
-        offer_id=offer.id,
-        farmer_id=farmer.id,
-        buyer_id=offer.buyer_id,
-        final_price_per_kg=offer.offered_price_per_kg,
-        quantity_kg=offer.quantity_kg,
-        total_amount=round(offer.offered_price_per_kg * offer.quantity_kg, 2),
-        market_used=market_used,
-        status="OFFER_ACCEPTED",
-    )
-    db.add(transaction)
-    db.flush()  # get transaction.id before commit
-
-    # Seed the event timeline (Phase 12)
-    db.add(models.TransactionEvent(
-        transaction_id=transaction.id,
-        event_type="OFFER_CREATED",
-        description=f"Offer of ₹{offer.offered_price_per_kg}/kg created by buyer",
-        performed_by="buyer",
-        performed_by_id=offer.buyer_id,
-    ))
-    db.add(models.TransactionEvent(
-        transaction_id=transaction.id,
-        event_type="OFFER_ACCEPTED",
-        description=f"Offer accepted by farmer. Transaction initiated.",
-        performed_by="farmer",
-        performed_by_id=farmer.id,
-    ))
+    _farmer_owned_target(offer, farmer, db, "accept")
+    rnd = neg.ensure_rounds(db, offer, farmer.id)
+    neg.require_actionable_round(rnd, "farmer")
+    txn = neg.finalize_acceptance(db, offer, rnd, "farmer", farmer.id)
     db.commit()
-    return {"accepted": True, "transaction_id": transaction.id}
+    send_buyer_notification(db, offer.buyer_id, "offer_accepted", "Offer accepted",
+                            f"Your offer of ₹{offer.agreed_price_per_kg}/kg was accepted.", "success")
+    return {"accepted": True, "transaction_id": txn.id}
 
 
 @router.patch("/{offer_id}/reject")
 def reject_offer(offer_id: int, farmer: models.Farmer = Depends(require_farmer),
-                  db: Session = Depends(get_db)):
-    offer = db.query(models.BuyerOffer).filter(models.BuyerOffer.id == offer_id).first()
+                 db: Session = Depends(get_db)):
+    """Legacy farmer reject (path/behaviour preserved), now turn-aware."""
+    offer = (db.query(models.BuyerOffer).filter(models.BuyerOffer.id == offer_id)
+             .with_for_update().first())
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
     if offer.status != "pending":
         raise HTTPException(status_code=400, detail=f"This offer is already {offer.status} and cannot be changed")
-
-    if offer.listing_id:
-        listing = db.query(models.CropListing).filter(models.CropListing.id == offer.listing_id).first()
-        if not listing or listing.farmer_id != farmer.id:
-            raise HTTPException(status_code=403, detail="You can only reject offers on your own listings")
-    else:
-        lot = db.query(models.Lot).filter(models.Lot.id == offer.lot_id).first()
-        if not lot or lot.farmer_id != farmer.id:
-            raise HTTPException(status_code=403, detail="You can only reject offers on your own lots")
-        # If no other pending offers remain on this lot, free it back up.
-        remaining = (
-            db.query(models.BuyerOffer)
-            .filter(models.BuyerOffer.lot_id == lot.id, models.BuyerOffer.id != offer.id,
-                    models.BuyerOffer.status == "pending")
-            .count()
-        )
-        if remaining == 0 and lot.status == "UNDER_OFFER":
-            lot.status = "AVAILABLE"
-
-    offer.status = "rejected"
+    kind, target = _farmer_owned_target(offer, farmer, db, "reject")
+    rnd = neg.ensure_rounds(db, offer, farmer.id)
+    neg.require_actionable_round(rnd, "farmer")
+    neg.close_thread(db, offer, rnd, kind, target, neg.R_REJECTED, "rejected")
     db.commit()
+    send_buyer_notification(db, offer.buyer_id, "offer_rejected", "Offer declined",
+                            "The farmer declined your offer.", "warning")
     return {"rejected": True}

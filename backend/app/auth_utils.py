@@ -107,3 +107,12 @@ def require_farmer_or_transporter(current=Depends(get_current_user)):
     if current["role"] not in ("farmer", "transporter"):
         raise HTTPException(status_code=403, detail="Farmer or transporter account required")
     return current["user"], current["role"]
+
+
+def require_farmer_or_buyer(current=Depends(get_current_user)):
+    """For crop-offer negotiation endpoints shared by both participants of
+    an offer thread -- returns (user, role) so the caller derives identity
+    and authorization from whichever it is (never from the request body)."""
+    if current["role"] not in ("farmer", "buyer"):
+        raise HTTPException(status_code=403, detail="Farmer or buyer account required")
+    return current["user"], current["role"]

@@ -5,6 +5,7 @@ import { useI18n } from '../i18n/I18nContext'
 import Badge from '../components/Badge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import VerificationBadge from '../components/VerificationBadge'
+import OfferNegotiation from '../components/OfferNegotiation'
 
 const CROPS = [
   'Tomato', 'Onion', 'Potato', 'Wheat', 'Paddy (Rice)', 'Maize',
@@ -97,6 +98,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
   const [showOffers, setShowOffers] = useState(false)
   const [offerBusy, setOfferBusy] = useState(null)
   const [offerError, setOfferError] = useState('')
+  const [openThread, setOpenThread] = useState(null)
 
   async function loadMatches() {
     if (matches) { setExpanded(e => !e); return }
@@ -280,7 +282,10 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
                   <Badge tone={o.status === 'accepted' ? 'success' : o.status === 'rejected' ? 'neutral' : 'info'}>{t(`lots.offerStatus.${o.status}`)}</Badge>
                 </div>
                 {o.message && <div className="text-ink/50 dark:text-paper/50 mt-0.5">{o.message}</div>}
-                {o.status === 'pending' && (
+                {o.status === 'pending' && o.awaiting_role === 'buyer' && (
+                  <div className="mt-1"><Badge tone="info">{t('negotiation.awaiting.buyer')}</Badge></div>
+                )}
+                {o.status === 'pending' && o.awaiting_role !== 'buyer' && (
                   <div className="flex gap-2 mt-2">
                     <button disabled={offerBusy === o.id} onClick={() => respondOffer(o.id, 'accept')}
                       className="bg-forest text-paper font-semibold rounded px-2 py-1 disabled:opacity-60">
@@ -291,6 +296,12 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
                       {t('lots.reject')}
                     </button>
                   </div>
+                )}
+                <button onClick={() => setOpenThread(openThread === o.id ? null : o.id)} className="mt-2 text-forest font-semibold hover:underline">
+                  {openThread === o.id ? t('negotiation.hide') : t('negotiation.open')}
+                </button>
+                {openThread === o.id && (
+                  <div className="mt-2"><OfferNegotiation offerId={o.id} onChanged={async () => { try { setOffers(await api.offersForLot(lot.id)) } catch (e) {} onOfferAccepted && onOfferAccepted() }} /></div>
                 )}
               </div>
             ))}

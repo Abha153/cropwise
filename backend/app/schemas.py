@@ -176,6 +176,54 @@ class OfferOut(BaseModel):
     language: str = "en"
     status: str
     created_at: dt.datetime
+    # Additive negotiation fields (all optional -> legacy clients unaffected).
+    updated_at: Optional[dt.datetime] = None
+    accepted_round_id: Optional[int] = None
+    agreed_price_per_kg: Optional[float] = None
+    agreed_quantity_kg: Optional[float] = None
+    agreed_at: Optional[dt.datetime] = None
+    awaiting_role: Optional[str] = None   # whose move it is while status == "pending"
+    round_count: Optional[int] = None
+
+
+class OfferCounter(BaseModel):
+    """Body of a counter-offer. NO sender/receiver/buyer/farmer ids -- those
+    are derived from authentication + ownership on the server."""
+    price_per_kg: float = Field(..., gt=0)
+    quantity_kg: Optional[float] = Field(None, gt=0)   # defaults to the current round's quantity
+    message: Optional[str] = Field(None, max_length=2000)
+    language: str = "en"
+    # Optional stale-request guard: the round the client believed was current.
+    based_on_round_id: Optional[int] = None
+
+
+class OfferRoundOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    offer_id: int
+    sequence: int
+    sender_role: str
+    sender_id: int
+    receiver_role: str
+    receiver_id: int
+    price_per_kg: float
+    quantity_kg: float
+    message: Optional[str] = None
+    language: str = "en"
+    status: str
+    created_at: dt.datetime
+    responded_at: Optional[dt.datetime] = None
+
+
+class OfferThreadOut(BaseModel):
+    offer: OfferOut
+    rounds: List[OfferRoundOut]
+    awaiting_role: Optional[str] = None
+    can_act: dict
+    buyer: Optional[BuyerPublicOut] = None
+    farmer: Optional[FarmerPublicOut] = None
+    target: Optional[dict] = None
+    transaction_id: Optional[int] = None
 
 
 # ---------- Advisor ----------

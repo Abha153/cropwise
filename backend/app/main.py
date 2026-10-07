@@ -15,6 +15,7 @@ from app.routers import lots, buyer_demands, buyer_verification
 from app.routers import transactions, payments, grievances, receipts
 from app.routers import storage, transport, ratings, trip_reviews
 from app.routers import weather
+from app.routers import offer_negotiation
 from app.routers import transporters, transport_negotiation
 
 Base.metadata.create_all(bind=engine)
@@ -58,10 +59,26 @@ async def _timing_middleware(request: Request, call_next):
     return response
 
 
+def _backfill_offer_rounds():
+    """Idempotent: create round 1 for any pre-negotiation BuyerOffer."""
+    from app.database import SessionLocal
+    from app.services.offer_negotiation import backfill_offer_rounds
+    db = SessionLocal()
+    try:
+        n = backfill_offer_rounds(db)
+        logger.info("startup: offer-round backfill created %d round(s)", n)
+    except Exception:
+        db.rollback()
+        logger.exception("startup: offer-round backfill failed (offers are still lazily backfilled on use)")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def on_startup():
     t0 = time.monotonic()
     seed()
+    _backfill_offer_rounds()
     logger.info("startup: seed() completed in %.3fs", time.monotonic() - t0)
 
 
@@ -101,6 +118,7 @@ app.include_router(farmers.router)
 app.include_router(buyers.router)
 app.include_router(listings.router)
 app.include_router(offers.router)
+app.include_router(offer_negotiation.router)  # after offers.router: static /offers/* paths must win
 app.include_router(market.router)
 app.include_router(advisor.router)
 app.include_router(forecast.router)

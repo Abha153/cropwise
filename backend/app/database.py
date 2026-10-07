@@ -130,6 +130,15 @@ def run_lightweight_migrations():
             add_column_if_missing("transport_requests", "transporter_agreed_price", "FLOAT")
             add_column_if_missing("transport_requests", "transporter_agreed_at", "DATETIME")
             add_column_if_missing("transport_requests", "completed_at", "DATETIME")
+
+            # Multi-round crop-offer negotiation. The new table
+            # (buyer_offer_rounds) is created by create_all(); only new
+            # COLUMNS on the pre-existing buyer_offers table need ADD COLUMN.
+            add_column_if_missing("buyer_offers", "updated_at", "DATETIME")
+            add_column_if_missing("buyer_offers", "accepted_round_id", "INTEGER")
+            add_column_if_missing("buyer_offers", "agreed_price_per_kg", "FLOAT")
+            add_column_if_missing("buyer_offers", "agreed_quantity_kg", "FLOAT")
+            add_column_if_missing("buyer_offers", "agreed_at", "DATETIME")
         return
 
     # Postgres path: only the columns added after the Supabase migration.
@@ -211,4 +220,10 @@ def run_lightweight_migrations():
         conn.execute(text(
             "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP"
         ))
+        # Multi-round crop-offer negotiation columns (table is created by create_all).
+        conn.execute(text("ALTER TABLE buyer_offers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP"))
+        conn.execute(text("ALTER TABLE buyer_offers ADD COLUMN IF NOT EXISTS accepted_round_id INTEGER"))
+        conn.execute(text("ALTER TABLE buyer_offers ADD COLUMN IF NOT EXISTS agreed_price_per_kg DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE buyer_offers ADD COLUMN IF NOT EXISTS agreed_quantity_kg DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE buyer_offers ADD COLUMN IF NOT EXISTS agreed_at TIMESTAMP"))
         conn.commit()

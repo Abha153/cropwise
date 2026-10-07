@@ -99,9 +99,55 @@ class BuyerOffer(Base):
     language = Column(String, default="en")
     status = Column(String, default="pending")  # pending/accepted/rejected/withdrawn
     created_at = Column(DateTime, default=now)
+    # Multi-round negotiation (additive). `status` above remains the
+    # THREAD-level commercial state ("pending" == negotiation still open).
+    # `offered_price_per_kg` / `quantity_kg` MIRROR the latest round while
+    # the thread is open; every historical value lives in BuyerOfferRound.
+    # Once accepted, the agreed_* fields freeze the authoritative deal terms.
+    updated_at = Column(DateTime, nullable=True)
+    accepted_round_id = Column(Integer, nullable=True)
+    agreed_price_per_kg = Column(Float, nullable=True)
+    agreed_quantity_kg = Column(Float, nullable=True)
+    agreed_at = Column(DateTime, nullable=True)
 
     buyer = relationship("Buyer", back_populates="offers")
     listing = relationship("CropListing", back_populates="offers")
+    rounds = relationship("BuyerOfferRound", back_populates="offer", order_by="BuyerOfferRound.sequence")
+
+
+class BuyerOfferRound(Base):
+    """One immutable row per negotiation round of a crop offer (buyer <->
+    farmer). Mirrors the persistent-history pattern of TransportOffer but is
+    a separate table: a listing/lot has MANY buyers, so each BuyerOffer is
+    its own thread. Sender/receiver identity is always derived server-side
+    (JWT + listing/lot ownership), never from the client.
+
+    status: PENDING (outstanding, awaiting receiver) / COUNTERED (replaced by
+    a later round) / ACCEPTED / REJECTED / WITHDRAWN. Only `status` and
+    `responded_at` ever change after creation; terms never do.
+    """
+    __tablename__ = "buyer_offer_rounds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    offer_id = Column(Integer, ForeignKey("buyer_offers.id"), nullable=False, index=True)
+    sequence = Column(Integer, nullable=False)  # 1, 2, 3... strictly increasing per offer
+    sender_role = Column(String, nullable=False)     # "buyer" / "farmer"
+    sender_id = Column(Integer, nullable=False)
+    receiver_role = Column(String, nullable=False)
+    receiver_id = Column(Integer, nullable=False)
+    price_per_kg = Column(Float, nullable=False)
+    quantity_kg = Column(Float, nullable=False)
+    message = Column(Text, nullable=True)
+    language = Column(String, default="en")
+    status = Column(String, default="PENDING", nullable=False)
+    created_at = Column(DateTime, default=now)
+    responded_at = Column(DateTime, nullable=True)
+
+    offer = relationship("BuyerOffer", back_populates="rounds")
+
+    __table_args__ = (
+        UniqueConstraint("offer_id", "sequence", name="uq_offer_round_sequence"),
+    )
 
 
 class Transaction(Base):

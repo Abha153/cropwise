@@ -48,7 +48,9 @@ async function request(path, { method = 'GET', body, auth = false, form = false,
       const errJson = await res.json()
       detail = errJson.detail || detail
     } catch (e) {}
-    throw new Error(detail)
+    const err = new Error(detail)
+    err.status = res.status   // lets callers distinguish e.g. 409 stale-round conflicts
+    throw err
   }
   if (res.status === 204) return null
   return res.json()
@@ -133,6 +135,14 @@ export const api = {
   myOffers: () => request('/offers/mine', { auth: true }),
   acceptOffer: (id) => request(`/offers/${id}/accept`, { method: 'PATCH', auth: true }),
   rejectOffer: (id) => request(`/offers/${id}/reject`, { method: 'PATCH', auth: true }),
+  // Multi-round negotiation (buyer <-> farmer). Identity is derived server-side from the token.
+  offersAwaitingMe: () => request('/offers/awaiting-me', { auth: true }),
+  offerThread: (offerId) => request(`/offers/${offerId}`, { auth: true }),
+  offerRounds: (offerId) => request(`/offers/${offerId}/rounds`, { auth: true }),
+  counterOffer: (offerId, payload) => request(`/offers/${offerId}/counter`, { method: 'POST', body: payload, auth: true }),
+  acceptOfferRound: (offerId, roundId) => request(`/offers/${offerId}/rounds/${roundId}/accept`, { method: 'POST', auth: true }),
+  rejectOfferRound: (offerId, roundId) => request(`/offers/${offerId}/rounds/${roundId}/reject`, { method: 'POST', auth: true }),
+  withdrawOffer: (offerId) => request(`/offers/${offerId}/withdraw`, { method: 'POST', auth: true }),
 
   // Matching
   matchBuyers: (listingId) => request(`/matching/listing/${listingId}`, { auth: true }),
