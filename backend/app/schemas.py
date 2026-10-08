@@ -43,6 +43,76 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# ---------- Public verification view + Trust summary (Phase C) ----------
+
+class BuyerVerificationPublicOut(BaseModel):
+    """What GET /buyer-verification/{buyer_id} may show to anyone: the
+    display tier only. Never documents, GST/licence/registration numbers,
+    notes, reviewer identity or the raw internal status."""
+    buyer_id: int
+    display_status: str
+    display_label: str
+    display_description: str
+    verified_at: Optional[dt.datetime] = None
+
+
+class TrustSubjectOut(BaseModel):
+    role: str
+    id: int
+
+
+class TrustVerificationOut(BaseModel):
+    state: str                  # VERIFIED / NOT_VERIFIED / NOT_SUPPORTED
+    tier: Optional[str] = None  # buyer display tier (see buyer_verification.display_info)
+    supported: bool
+
+
+class TrustRatingOut(BaseModel):
+    state: str                  # RATED / INSUFFICIENT_DATA
+    count: int
+    average: Optional[float] = None   # only when count >= min_count
+    min_count: int
+
+
+class TrustPaymentHistoryOut(BaseModel):
+    state: str                  # AVAILABLE / INSUFFICIENT_DATA
+    non_demo_paid_count: int
+    min_count: int
+
+
+class TrustContextOut(BaseModel):
+    completed_count: int
+    distinct_counterparties: int
+    experience: str             # EXPERIENCE / INSUFFICIENT_DATA
+    rating: TrustRatingOut
+    written_review_count: int
+    reviewed: str               # REVIEWED / INSUFFICIENT_DATA
+    payment_history: Optional[TrustPaymentHistoryOut] = None
+
+
+class TrustThresholdsOut(BaseModel):
+    min_ratings_for_average: int
+    min_written_reviews: int
+    min_completed_for_experience: int
+    min_non_demo_payments: int
+
+
+class TrustReasonOut(BaseModel):
+    code: str                   # i18n key; the client translates it
+    params: Optional[dict] = None
+
+
+class TrustSummaryOut(BaseModel):
+    subject: TrustSubjectOut
+    badges: List[str]           # earned: VERIFIED / RATED / REVIEWED / EXPERIENCE
+    flags: List[str]            # NOT_VERIFIED / NOT_SUPPORTED / INSUFFICIENT_DATA
+    verification: TrustVerificationOut
+    trade: Optional[TrustContextOut] = None
+    logistics: Optional[TrustContextOut] = None
+    thresholds: TrustThresholdsOut
+    reason_codes: List[TrustReasonOut]
+
+
 # ---------- Farmer / Buyer ----------
 
 class FarmerOut(BaseModel):

@@ -16,6 +16,63 @@ from app.mock_data.crops import CROPS
 from app.mock_data.historical_prices import generate_all_history
 
 
+def ensure_demo_buyer_verification_records(db=None, demo_emails=None) -> int:
+    """Give every DEMO buyer that is marked verified a real, backing
+    BuyerVerification record (plus its audit-log entry).
+
+    Trust summaries treat BuyerVerification as the source of truth, so a
+    demo buyer carrying only Buyer.verification_status == "verified" would
+    otherwise show as NOT_VERIFIED. Rather than weakening that rule, the
+    demo data is made consistent. Idempotent; only touches buyers whose
+    email is in DEMO_BUYERS (or `demo_emails`) and who have no record yet.
+    Runs on every startup, so databases seeded before this existed are
+    repaired too. Returns the number of records created.
+    """
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+    try:
+        if demo_emails is None:
+            demo_emails = {b["email"] for b in DEMO_BUYERS
+                           if b.get("verification_status") == "verified"}
+        if not demo_emails:
+            return 0
+        buyers = db.query(models.Buyer).filter(
+            models.Buyer.email.in_(list(demo_emails)),
+            models.Buyer.verification_status == "verified",
+        ).all()
+        created = 0
+        for buyer in buyers:
+            has_record = db.query(models.BuyerVerification.id).filter(
+                models.BuyerVerification.buyer_id == buyer.id
+            ).first()
+            if has_record:
+                continue
+            ts = dt.datetime.utcnow()
+            db.add(models.BuyerVerification(
+                buyer_id=buyer.id, business_name=buyer.company_name,
+                document_urls=[f"demo://buyer_{buyer.id}_verification.pdf"],
+                verification_status="VERIFIED", verification_method="PLATFORM_VERIFIED",
+                verification_notes="Demo seed record -- not a real platform review. (Demo data)",
+                submitted_at=ts, verified_at=ts, reviewed_at=ts, reviewed_by="demo-seed",
+            ))
+            db.add(models.BuyerVerificationAuditLog(
+                buyer_id=buyer.id, old_status="PENDING", new_status="VERIFIED",
+                reviewer_admin_id="demo-seed",
+                note="Demo seed record backing a verified demo buyer. (Demo data)",
+            ))
+            created += 1
+        if created:
+            db.commit()
+        return created
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if own_session:
+            db.close()
+
+
 def seed():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()

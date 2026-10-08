@@ -81,6 +81,20 @@ def _out(v: models.BuyerVerification) -> dict:
     return out
 
 
+def _public_out(v: models.BuyerVerification) -> dict:
+    """Public-safe view: display tier only (see BuyerVerificationPublicOut).
+    verified_at is shown only while the buyer is actually Platform Verified --
+    reject/suspend do not clear it, so it must not leak for other tiers."""
+    info = display_info(v)
+    return {
+        "buyer_id": v.buyer_id,
+        "display_status": info["status"],
+        "display_label": info["label"],
+        "display_description": info["description"],
+        "verified_at": v.verified_at if info["status"] == "PLATFORM_VERIFIED" else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Buyer — submit / view own verification
 # ---------------------------------------------------------------------------
@@ -140,16 +154,19 @@ def my_verification(
     return _out(v)
 
 
-@router.get("/{buyer_id}", response_model=schemas.BuyerVerificationOut)
+@router.get("/{buyer_id}", response_model=schemas.BuyerVerificationPublicOut)
 def get_buyer_verification(
     buyer_id: int,
     db: Session = Depends(get_db),
 ):
-    """Public endpoint — anyone can see a buyer's verification status (not the documents)."""
+    """Public endpoint -- anyone can see a buyer's verification DISPLAY tier.
+    Documents, GST/licence/registration numbers, admin notes, reviewer
+    identity and the raw internal status are never returned here (they remain
+    available to the buyer via /me and to admins via the list endpoint)."""
     v = db.query(models.BuyerVerification).filter(models.BuyerVerification.buyer_id == buyer_id).first()
     if not v:
         raise HTTPException(status_code=404, detail="No verification record for this buyer")
-    return _out(v)
+    return _public_out(v)
 
 
 @router.get("/{buyer_id}/badge")

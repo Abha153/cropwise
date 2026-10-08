@@ -5,7 +5,7 @@ import time
 from app.config import settings, logger
 from app.database import Base, engine, run_lightweight_migrations
 from sqlalchemy import text
-from app.seed_data import seed
+from app.seed_data import seed, ensure_demo_buyer_verification_records
 from app.routers import (
     auth, farmers, buyers, listings, offers, market, advisor,
     forecast, matching, logistics, profit, group_selling, notifications,
@@ -17,6 +17,7 @@ from app.routers import storage, transport, ratings, trip_reviews
 from app.routers import weather
 from app.routers import offer_negotiation
 from app.routers import transporters, transport_negotiation
+from app.routers import trust
 
 Base.metadata.create_all(bind=engine)
 run_lightweight_migrations()
@@ -80,6 +81,13 @@ def on_startup():
     seed()
     _backfill_offer_rounds()
     logger.info("startup: seed() completed in %.3fs", time.monotonic() - t0)
+    # Trust summaries need a backing BuyerVerification record for every demo
+    # buyer marked verified (see seed_data.ensure_demo_buyer_verification_records).
+    # Idempotent; a failure here must never stop the API from starting.
+    try:
+        ensure_demo_buyer_verification_records()
+    except Exception:
+        logger.exception("startup: could not backfill demo buyer verification records")
 
 
 @app.get("/")
@@ -143,4 +151,5 @@ app.include_router(transporters.router)
 app.include_router(transport_negotiation.router)
 app.include_router(ratings.router)
 app.include_router(trip_reviews.router)
+app.include_router(trust.router)
 app.include_router(weather.router)
