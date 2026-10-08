@@ -1,0 +1,1302 @@
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 37a7a09..8bc09cd 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -5,7 +5,7 @@ import time
+ from app.config import settings, logger
+ from app.database import Base, engine, run_lightweight_migrations
+ from sqlalchemy import text
+-from app.seed_data import seed
++from app.seed_data import seed, ensure_demo_buyer_verification_records
+ from app.routers import (
+     auth, farmers, buyers, listings, offers, market, advisor,
+     forecast, matching, logistics, profit, group_selling, notifications,
+@@ -17,6 +17,7 @@ from app.routers import storage, transport, ratings, trip_reviews
+ from app.routers import weather
+ from app.routers import offer_negotiation
+ from app.routers import transporters, transport_negotiation
++from app.routers import trust
+ 
+ Base.metadata.create_all(bind=engine)
+ run_lightweight_migrations()
+@@ -80,6 +81,13 @@ def on_startup():
+     seed()
+     _backfill_offer_rounds()
+     logger.info("startup: seed() completed in %.3fs", time.monotonic() - t0)
++    # Trust summaries need a backing BuyerVerification record for every demo
++    # buyer marked verified (see seed_data.ensure_demo_buyer_verification_records).
++    # Idempotent; a failure here must never stop the API from starting.
++    try:
++        ensure_demo_buyer_verification_records()
++    except Exception:
++        logger.exception("startup: could not backfill demo buyer verification records")
+ 
+ 
+ @app.get("/")
+@@ -143,4 +151,5 @@ app.include_router(transporters.router)
+ app.include_router(transport_negotiation.router)
+ app.include_router(ratings.router)
+ app.include_router(trip_reviews.router)
++app.include_router(trust.router)
+ app.include_router(weather.router)
+diff --git a/backend/app/routers/buyer_verification.py b/backend/app/routers/buyer_verification.py
+index c34c46e..5e69bce 100644
+--- a/backend/app/routers/buyer_verification.py
++++ b/backend/app/routers/buyer_verification.py
+@@ -81,6 +81,20 @@ def _out(v: models.BuyerVerification) -> dict:
+     return out
+ 
+ 
++def _public_out(v: models.BuyerVerification) -> dict:
++    """Public-safe view: display tier only (see BuyerVerificationPublicOut).
++    verified_at is shown only while the buyer is actually Platform Verified --
++    reject/suspend do not clear it, so it must not leak for other tiers."""
++    info = display_info(v)
++    return {
++        "buyer_id": v.buyer_id,
++        "display_status": info["status"],
++        "display_label": info["label"],
++        "display_description": info["description"],
++        "verified_at": v.verified_at if info["status"] == "PLATFORM_VERIFIED" else None,
++    }
++
++
+ # ---------------------------------------------------------------------------
+ # Buyer — submit / view own verification
+ # ---------------------------------------------------------------------------
+@@ -140,16 +154,19 @@ def my_verification(
+     return _out(v)
+ 
+ 
+-@router.get("/{buyer_id}", response_model=schemas.BuyerVerificationOut)
++@router.get("/{buyer_id}", response_model=schemas.BuyerVerificationPublicOut)
+ def get_buyer_verification(
+     buyer_id: int,
+     db: Session = Depends(get_db),
+ ):
+-    """Public endpoint — anyone can see a buyer's verification status (not the documents)."""
++    """Public endpoint -- anyone can see a buyer's verification DISPLAY tier.
++    Documents, GST/licence/registration numbers, admin notes, reviewer
++    identity and the raw internal status are never returned here (they remain
++    available to the buyer via /me and to admins via the list endpoint)."""
+     v = db.query(models.BuyerVerification).filter(models.BuyerVerification.buyer_id == buyer_id).first()
+     if not v:
+         raise HTTPException(status_code=404, detail="No verification record for this buyer")
+-    return _out(v)
++    return _public_out(v)
+ 
+ 
+ @router.get("/{buyer_id}/badge")
+diff --git a/backend/app/routers/trust.py b/backend/app/routers/trust.py
+new file mode 100644
+index 0000000..ddfe863
+--- /dev/null
++++ b/backend/app/routers/trust.py
+@@ -0,0 +1,63 @@
++"""
++Marketplace trust summaries (Phase C).
++
++Authenticated-only, read-only. Responses are explicit whitelist models
++(schemas.TrustSummaryOut) built by app/services/trust_summary.py from
++existing rows -- there is no second rating/review/trust system here.
++
++Authorization: a subject the caller may not see is indistinguishable from
++a subject that does not exist -- both return the identical 404.
++"""
++from fastapi import APIRouter, Depends, HTTPException
++from sqlalchemy.orm import Session
++
++from app.database import get_db
++from app import schemas
++from app.auth_utils import get_current_user
++from app.services import trust_summary
++
++router = APIRouter(prefix="/trust", tags=["trust"])
++
++NOT_FOUND_DETAIL = "Trust profile not found"
++
++
++def _not_found() -> HTTPException:
++    return HTTPException(status_code=404, detail=NOT_FOUND_DETAIL)
++
++
++def _serve(db: Session, current: dict, subject_role: str, subject_id: int) -> dict:
++    viewer_role = current["role"]
++    viewer_id = None if viewer_role == "admin" else current["user"].id
++    if not trust_summary.can_view(db, viewer_role, viewer_id, subject_role, subject_id):
++        raise _not_found()
++    summary = trust_summary.build_trust_summary(db, subject_role, subject_id)
++    if summary is None:
++        raise _not_found()
++    return summary
++
++
++@router.get("/me", response_model=schemas.TrustSummaryOut)
++def my_trust(current=Depends(get_current_user), db: Session = Depends(get_db)):
++    """The caller's own summary. The admin account has no trust profile."""
++    role = current["role"]
++    if role not in trust_summary.SUBJECT_ROLES:
++        raise _not_found()
++    return _serve(db, current, role, current["user"].id)
++
++
++@router.get("/farmers/{farmer_id}", response_model=schemas.TrustSummaryOut)
++def farmer_trust(farmer_id: int, current=Depends(get_current_user),
++                 db: Session = Depends(get_db)):
++    return _serve(db, current, "farmer", farmer_id)
++
++
++@router.get("/buyers/{buyer_id}", response_model=schemas.TrustSummaryOut)
++def buyer_trust(buyer_id: int, current=Depends(get_current_user),
++                db: Session = Depends(get_db)):
++    return _serve(db, current, "buyer", buyer_id)
++
++
++@router.get("/transporters/{transporter_id}", response_model=schemas.TrustSummaryOut)
++def transporter_trust(transporter_id: int, current=Depends(get_current_user),
++                      db: Session = Depends(get_db)):
++    return _serve(db, current, "transporter", transporter_id)
+diff --git a/backend/app/schemas.py b/backend/app/schemas.py
+index dd09a45..b68fc23 100644
+--- a/backend/app/schemas.py
++++ b/backend/app/schemas.py
+@@ -43,6 +43,76 @@ class LoginRequest(BaseModel):
+     password: str
+ 
+ 
++# ---------- Public verification view + Trust summary (Phase C) ----------
++
++class BuyerVerificationPublicOut(BaseModel):
++    """What GET /buyer-verification/{buyer_id} may show to anyone: the
++    display tier only. Never documents, GST/licence/registration numbers,
++    notes, reviewer identity or the raw internal status."""
++    buyer_id: int
++    display_status: str
++    display_label: str
++    display_description: str
++    verified_at: Optional[dt.datetime] = None
++
++
++class TrustSubjectOut(BaseModel):
++    role: str
++    id: int
++
++
++class TrustVerificationOut(BaseModel):
++    state: str                  # VERIFIED / NOT_VERIFIED / NOT_SUPPORTED
++    tier: Optional[str] = None  # buyer display tier (see buyer_verification.display_info)
++    supported: bool
++
++
++class TrustRatingOut(BaseModel):
++    state: str                  # RATED / INSUFFICIENT_DATA
++    count: int
++    average: Optional[float] = None   # only when count >= min_count
++    min_count: int
++
++
++class TrustPaymentHistoryOut(BaseModel):
++    state: str                  # AVAILABLE / INSUFFICIENT_DATA
++    non_demo_paid_count: int
++    min_count: int
++
++
++class TrustContextOut(BaseModel):
++    completed_count: int
++    distinct_counterparties: int
++    experience: str             # EXPERIENCE / INSUFFICIENT_DATA
++    rating: TrustRatingOut
++    written_review_count: int
++    reviewed: str               # REVIEWED / INSUFFICIENT_DATA
++    payment_history: Optional[TrustPaymentHistoryOut] = None
++
++
++class TrustThresholdsOut(BaseModel):
++    min_ratings_for_average: int
++    min_written_reviews: int
++    min_completed_for_experience: int
++    min_non_demo_payments: int
++
++
++class TrustReasonOut(BaseModel):
++    code: str                   # i18n key; the client translates it
++    params: Optional[dict] = None
++
++
++class TrustSummaryOut(BaseModel):
++    subject: TrustSubjectOut
++    badges: List[str]           # earned: VERIFIED / RATED / REVIEWED / EXPERIENCE
++    flags: List[str]            # NOT_VERIFIED / NOT_SUPPORTED / INSUFFICIENT_DATA
++    verification: TrustVerificationOut
++    trade: Optional[TrustContextOut] = None
++    logistics: Optional[TrustContextOut] = None
++    thresholds: TrustThresholdsOut
++    reason_codes: List[TrustReasonOut]
++
++
+ # ---------- Farmer / Buyer ----------
+ 
+ class FarmerOut(BaseModel):
+diff --git a/backend/app/seed_data.py b/backend/app/seed_data.py
+index 41bf45f..b7c392a 100644
+--- a/backend/app/seed_data.py
++++ b/backend/app/seed_data.py
+@@ -16,6 +16,63 @@ from app.mock_data.crops import CROPS
+ from app.mock_data.historical_prices import generate_all_history
+ 
+ 
++def ensure_demo_buyer_verification_records(db=None, demo_emails=None) -> int:
++    """Give every DEMO buyer that is marked verified a real, backing
++    BuyerVerification record (plus its audit-log entry).
++
++    Trust summaries treat BuyerVerification as the source of truth, so a
++    demo buyer carrying only Buyer.verification_status == "verified" would
++    otherwise show as NOT_VERIFIED. Rather than weakening that rule, the
++    demo data is made consistent. Idempotent; only touches buyers whose
++    email is in DEMO_BUYERS (or `demo_emails`) and who have no record yet.
++    Runs on every startup, so databases seeded before this existed are
++    repaired too. Returns the number of records created.
++    """
++    own_session = db is None
++    if own_session:
++        db = SessionLocal()
++    try:
++        if demo_emails is None:
++            demo_emails = {b["email"] for b in DEMO_BUYERS
++                           if b.get("verification_status") == "verified"}
++        if not demo_emails:
++            return 0
++        buyers = db.query(models.Buyer).filter(
++            models.Buyer.email.in_(list(demo_emails)),
++            models.Buyer.verification_status == "verified",
++        ).all()
++        created = 0
++        for buyer in buyers:
++            has_record = db.query(models.BuyerVerification.id).filter(
++                models.BuyerVerification.buyer_id == buyer.id
++            ).first()
++            if has_record:
++                continue
++            ts = dt.datetime.utcnow()
++            db.add(models.BuyerVerification(
++                buyer_id=buyer.id, business_name=buyer.company_name,
++                document_urls=[f"demo://buyer_{buyer.id}_verification.pdf"],
++                verification_status="VERIFIED", verification_method="PLATFORM_VERIFIED",
++                verification_notes="Demo seed record -- not a real platform review. (Demo data)",
++                submitted_at=ts, verified_at=ts, reviewed_at=ts, reviewed_by="demo-seed",
++            ))
++            db.add(models.BuyerVerificationAuditLog(
++                buyer_id=buyer.id, old_status="PENDING", new_status="VERIFIED",
++                reviewer_admin_id="demo-seed",
++                note="Demo seed record backing a verified demo buyer. (Demo data)",
++            ))
++            created += 1
++        if created:
++            db.commit()
++        return created
++    except Exception:
++        db.rollback()
++        raise
++    finally:
++        if own_session:
++            db.close()
++
++
+ def seed():
+     Base.metadata.create_all(bind=engine)
+     db = SessionLocal()
+diff --git a/backend/app/services/trust_summary.py b/backend/app/services/trust_summary.py
+new file mode 100644
+index 0000000..3860bb2
+--- /dev/null
++++ b/backend/app/services/trust_summary.py
+@@ -0,0 +1,329 @@
++"""
++Trust summary -- ONE reusable, read-only service that turns existing rows
++into explainable marketplace trust signals.
++
++Design rules (Phase C):
++  * Independent signals, never a composite "trust score".
++  * Everything is recomputed from source rows (Rating, TransportReview,
++    TripReview, Transaction, TransportRequest, Payment, BuyerVerification).
++  * The legacy stored fields -- Farmer.rating, Buyer.reliability_score,
++    Buyer.payment_history_score, Transporter.rating / rating_count -- are
++    NEVER read here. They carry model/seed defaults (4.5, 60/85, 60/90, 0.0)
++    that look like a track record without any history behind them.
++  * No new tables, no writes. Output contains only counts, averages and
++    state labels -- no identities, ids of other records, amounts or text.
++
++Definitions (single source of truth; change them here only):
++  completed transaction : Transaction.status == COMPLETED (case-insensitive,
++                          so legacy lowercase "completed" rows count).
++  completed trip        : TransportRequest.status in DELIVERED / COMPLETED
++                          (the two statuses on which transport reviews are
++                          accepted in transport_negotiation.submit_review).
++  genuine rating        : a Rating / TransportReview / TripReview row. All
++                          three are only creatable by a participant of a
++                          finished transaction/trip (enforced by their
++                          routers), so no extra filtering is needed.
++  written review        : a non-blank Rating.review / comment.
++"""
++from typing import Dict, List, Optional
++
++from sqlalchemy import distinct, exists, func
++from sqlalchemy.orm import Session
++
++from app import models
++
++# ---------------------------------------------------------------------------
++# Product thresholds (approved for Phase C)
++# ---------------------------------------------------------------------------
++MIN_RATINGS_FOR_AVERAGE = 3
++MIN_WRITTEN_REVIEWS = 1
++MIN_COMPLETED_FOR_EXPERIENCE = 1
++# Not specified by product; chosen to match the rating threshold.
++MIN_NON_DEMO_PAYMENTS = 3
++
++COMPLETED_TRANSACTION_STATUS = "COMPLETED"
++COMPLETED_TRIP_STATUSES = ("DELIVERED", "COMPLETED")
++
++SUBJECT_ROLES = ("farmer", "buyer", "transporter")
++
++THRESHOLDS = {
++    "min_ratings_for_average": MIN_RATINGS_FOR_AVERAGE,
++    "min_written_reviews": MIN_WRITTEN_REVIEWS,
++    "min_completed_for_experience": MIN_COMPLETED_FOR_EXPERIENCE,
++    "min_non_demo_payments": MIN_NON_DEMO_PAYMENTS,
++}
++
++
++# ---------------------------------------------------------------------------
++# Visibility
++# ---------------------------------------------------------------------------
++
++def can_view(db: Session, viewer_role: str, viewer_id: Optional[int],
++             subject_role: str, subject_id: int) -> bool:
++    """Who may see whose trust summary. Callers must answer a False here
++    with the SAME response as a nonexistent subject (404)."""
++    if viewer_role == "admin":
++        return True
++    if viewer_role == subject_role and viewer_id == subject_id:
++        return True
++
++    if subject_role == "buyer":
++        # Buyers are a public marketplace directory for farmers.
++        return viewer_role == "farmer"
++
++    if subject_role == "farmer":
++        if viewer_role in ("farmer", "buyer"):
++            return True
++        if viewer_role == "transporter":
++            # Farmer identity is withheld from transporters until they have
++            # claimed one of that farmer's requests (see transporters.py).
++            return db.query(models.TransportRequest.id).filter(
++                models.TransportRequest.farmer_id == subject_id,
++                models.TransportRequest.transporter_id == viewer_id,
++            ).first() is not None
++        return False
++
++    if subject_role == "transporter":
++        # Only counterparties who actually have a request with them.
++        if viewer_role == "farmer":
++            party = models.TransportRequest.farmer_id
++        elif viewer_role == "buyer":
++            party = models.TransportRequest.buyer_id
++        else:
++            return False
++        return db.query(models.TransportRequest.id).filter(
++            party == viewer_id,
++            models.TransportRequest.transporter_id == subject_id,
++        ).first() is not None
++
++    return False
++
++
++# ---------------------------------------------------------------------------
++# Signal builders
++# ---------------------------------------------------------------------------
++
++def _rating_signal(values: List[float]) -> dict:
++    count = len(values)
++    if count >= MIN_RATINGS_FOR_AVERAGE:
++        return {
++            "state": "RATED",
++            "count": count,
++            "average": round(sum(values) / count, 2),
++            "min_count": MIN_RATINGS_FOR_AVERAGE,
++        }
++    # Below the threshold the average is withheld on purpose: one or two
++    # ratings are anecdotes (and can identify the rater).
++    return {
++        "state": "INSUFFICIENT_DATA",
++        "count": count,
++        "average": None,
++        "min_count": MIN_RATINGS_FOR_AVERAGE,
++    }
++
++
++def _context(ratings: List[float], written: int, completed: int,
++             distinct_counterparties: int,
++             payment_history: Optional[dict] = None) -> dict:
++    return {
++        "completed_count": completed,
++        "distinct_counterparties": distinct_counterparties,
++        "experience": ("EXPERIENCE" if completed >= MIN_COMPLETED_FOR_EXPERIENCE
++                       else "INSUFFICIENT_DATA"),
++        "rating": _rating_signal(ratings),
++        "written_review_count": written,
++        "reviewed": ("REVIEWED" if written >= MIN_WRITTEN_REVIEWS
++                     else "INSUFFICIENT_DATA"),
++        "payment_history": payment_history,
++    }
++
++
++def _is_written(text: Optional[str]) -> bool:
++    return bool(text and text.strip())
++
++
++def _trade_context(db: Session, role: str, subject_id: int) -> dict:
++    """Farmer<->buyer trade: Rating rows received + completed Transactions."""
++    rows = db.query(models.Rating.rating, models.Rating.review).filter(
++        models.Rating.ratee_role == role,          # role-scoped: ids overlap across tables
++        models.Rating.ratee_id == subject_id,
++    ).all()
++    ratings = [r.rating for r in rows]
++    written = sum(1 for r in rows if _is_written(r.review))
++
++    own = models.Transaction.farmer_id if role == "farmer" else models.Transaction.buyer_id
++    other = models.Transaction.buyer_id if role == "farmer" else models.Transaction.farmer_id
++    completed, counterparties = db.query(
++        func.count(models.Transaction.id), func.count(distinct(other)),
++    ).filter(
++        own == subject_id,
++        func.upper(models.Transaction.status) == COMPLETED_TRANSACTION_STATUS,
++    ).one()
++
++    payment = _payment_history(db, subject_id) if role == "buyer" else None
++    return _context(ratings, written, completed or 0, counterparties or 0, payment)
++
++
++def _payment_history(db: Session, buyer_id: int) -> dict:
++    """Only genuine (non-demo) PAID payments count. Payment.is_demo is True
++    for every payment the app can currently create, so today this is
++    INSUFFICIENT_DATA by construction -- which is the honest answer."""
++    paid = db.query(func.count(models.Payment.id)).filter(
++        models.Payment.buyer_id == buyer_id,
++        models.Payment.is_demo.is_(False),
++        models.Payment.payment_status == "PAID",
++    ).scalar() or 0
++    return {
++        "state": "AVAILABLE" if paid >= MIN_NON_DEMO_PAYMENTS else "INSUFFICIENT_DATA",
++        "non_demo_paid_count": paid,
++        "min_count": MIN_NON_DEMO_PAYMENTS,
++    }
++
++
++def _logistics_context(db: Session, role: str, subject_id: int) -> dict:
++    """Farmer<->transporter logistics: TransportReview (+ de-duplicated
++    TripReview TRANSPORTER rows for transporters) + completed trips."""
++    TR = models.TransportRequest
++    tr_rows = db.query(models.TransportReview.rating, models.TransportReview.comment).filter(
++        models.TransportReview.reviewee_role == role,
++        models.TransportReview.reviewee_id == subject_id,
++    ).all()
++    ratings = [r.rating for r in tr_rows]
++    written = sum(1 for r in tr_rows if _is_written(r.comment))
++
++    if role == "transporter":
++        # A farmer may have filed BOTH a TransportReview and a TripReview
++        # (TRANSPORTER) for the same job. Count that farmer/job once, with
++        # the TransportReview taking precedence.
++        already_counted = exists().where(
++            models.TransportReview.transport_request_id == models.TripReview.transport_request_id,
++            models.TransportReview.reviewer_role == "farmer",
++            models.TransportReview.reviewer_id == models.TripReview.reviewer_farmer_id,
++            models.TransportReview.reviewee_role == "transporter",
++        ).correlate(models.TripReview)
++        trip_rows = (
++            db.query(models.TripReview.rating, models.TripReview.comment)
++            .join(TR, TR.id == models.TripReview.transport_request_id)
++            .filter(
++                models.TripReview.review_type == "TRANSPORTER",
++                TR.transporter_id == subject_id,
++                ~already_counted,
++            )
++            .all()
++        )
++        ratings += [r.rating for r in trip_rows]
++        written += sum(1 for r in trip_rows if _is_written(r.comment))
++        own, other = TR.transporter_id, TR.farmer_id
++    else:
++        own, other = TR.farmer_id, TR.transporter_id
++
++    completed, counterparties = db.query(
++        func.count(TR.id), func.count(distinct(other)),   # COUNT(DISTINCT) skips NULL
++    ).filter(
++        own == subject_id,
++        func.upper(TR.status).in_(COMPLETED_TRIP_STATUSES),
++    ).one()
++    return _context(ratings, written, completed or 0, counterparties or 0)
++
++
++def _buyer_verification(db: Session, buyer_id: int) -> dict:
++    # Imported here (not at module top) to keep the service importable
++    # without the router layer; display_info is THE verification mapping.
++    from app.routers.buyer_verification import display_info
++
++    v = db.query(models.BuyerVerification).filter(
++        models.BuyerVerification.buyer_id == buyer_id
++    ).first()
++    tier = display_info(v)["status"]
++    # BuyerVerification is the source of truth. A legacy Buyer.verification_status
++    # == "verified" with no backing record is deliberately NOT honoured.
++    return {
++        "state": "VERIFIED" if tier == "PLATFORM_VERIFIED" else "NOT_VERIFIED",
++        "tier": tier,
++        "supported": True,
++    }
++
++
++# ---------------------------------------------------------------------------
++# Public entry point
++# ---------------------------------------------------------------------------
++
++def _subject_exists(db: Session, role: str, subject_id: int) -> bool:
++    model = {"farmer": models.Farmer, "buyer": models.Buyer,
++             "transporter": models.Transporter}[role]
++    return db.query(model.id).filter(model.id == subject_id).first() is not None
++
++
++def build_trust_summary(db: Session, role: str, subject_id: int) -> Optional[Dict]:
++    """Returns the whitelisted summary dict, or None if the subject does not
++    exist. Performs NO authorization -- callers must use can_view() first."""
++    if role not in SUBJECT_ROLES or not _subject_exists(db, role, subject_id):
++        return None
++
++    if role == "buyer":
++        verification = _buyer_verification(db, subject_id)
++    else:
++        # No verification process exists for farmers or transporters.
++        verification = {"state": "NOT_SUPPORTED", "tier": None, "supported": False}
++
++    trade = _trade_context(db, role, subject_id) if role in ("farmer", "buyer") else None
++    logistics = _logistics_context(db, role, subject_id) if role in ("farmer", "transporter") else None
++    contexts = {"trade": trade, "logistics": logistics}
++
++    badges: List[str] = []
++    if verification["state"] == "VERIFIED":
++        badges.append("VERIFIED")
++    live = [c for c in contexts.values() if c]
++    if any(c["rating"]["state"] == "RATED" for c in live):
++        badges.append("RATED")
++    if any(c["reviewed"] == "REVIEWED" for c in live):
++        badges.append("REVIEWED")
++    if any(c["experience"] == "EXPERIENCE" for c in live):
++        badges.append("EXPERIENCE")
++
++    flags: List[str] = []
++    if verification["state"] == "NOT_VERIFIED":
++        flags.append("NOT_VERIFIED")
++    if verification["state"] == "NOT_SUPPORTED":
++        flags.append("NOT_SUPPORTED")
++    if not any(b in badges for b in ("RATED", "REVIEWED", "EXPERIENCE")):
++        flags.append("INSUFFICIENT_DATA")
++
++    reasons: List[dict] = []
++    if verification["state"] == "VERIFIED":
++        reasons.append({"code": "VERIFIED_BY_PLATFORM_ADMIN", "params": None})
++    elif verification["state"] == "NOT_SUPPORTED":
++        reasons.append({"code": "VERIFICATION_NOT_SUPPORTED", "params": {"role": role}})
++    for name, ctx in contexts.items():
++        if not ctx:
++            continue
++        rating = ctx["rating"]
++        reasons.append({
++            "code": "RATINGS_SUFFICIENT" if rating["state"] == "RATED" else "RATINGS_BELOW_THRESHOLD",
++            "params": {"context": name, "count": rating["count"], "min": rating["min_count"]},
++        })
++        reasons.append({
++            "code": "COMPLETED_ACTIVITY" if ctx["experience"] == "EXPERIENCE" else "NO_COMPLETED_ACTIVITY",
++            "params": {"context": name, "count": ctx["completed_count"]},
++        })
++        reasons.append({
++            "code": "WRITTEN_REVIEWS_PRESENT" if ctx["reviewed"] == "REVIEWED" else "NO_WRITTEN_REVIEWS",
++            "params": {"context": name, "count": ctx["written_review_count"]},
++        })
++        ph = ctx["payment_history"]
++        if ph and ph["state"] != "AVAILABLE":
++            reasons.append({
++                "code": "PAYMENT_HISTORY_INSUFFICIENT",
++                "params": {"count": ph["non_demo_paid_count"], "min": ph["min_count"]},
++            })
++
++    return {
++        "subject": {"role": role, "id": subject_id},
++        "badges": badges,
++        "flags": flags,
++        "verification": verification,
++        "trade": trade,
++        "logistics": logistics,
++        "thresholds": dict(THRESHOLDS),
++        "reason_codes": reasons,
++    }
+diff --git a/backend/tests/test_trust_summary.py b/backend/tests/test_trust_summary.py
+new file mode 100644
+index 0000000..e33840d
+--- /dev/null
++++ b/backend/tests/test_trust_summary.py
+@@ -0,0 +1,654 @@
++"""
++Phase C -- marketplace trust summaries.
++
++Self-contained: each test gets a fresh in-memory database and overrides the
++get_db dependency, so it does not depend on (or disturb) the shared test DB.
++The TestClient is deliberately NOT used as a context manager, so the app's
++startup seeding does not run.
++"""
++import datetime as dt
++import itertools
++import json
++
++import pytest
++from fastapi.testclient import TestClient
++from sqlalchemy import create_engine
++from sqlalchemy.orm import sessionmaker
++from sqlalchemy.pool import StaticPool
++
++from app import models
++from app.auth_utils import create_access_token
++from app.config import settings
++from app.database import Base, get_db
++from app.main import app
++from app.seed_data import DEMO_BUYERS, ensure_demo_buyer_verification_records
++from app.services import trust_summary
++
++_counter = itertools.count(1)
++
++
++class Env:
++    def __init__(self, db, client):
++        self.db = db
++        self.client = client
++
++    # ---- users ----
++    def _add(self, obj):
++        self.db.add(obj)
++        self.db.commit()
++        self.db.refresh(obj)
++        return obj
++
++    def farmer(self, **kw):
++        n = next(_counter)
++        kw.setdefault("name", f"Farmer {n}")
++        kw.setdefault("email", f"farmer{n}@example.test")
++        return self._add(models.Farmer(password_hash="x", location="Bilaspur", **kw))
++
++    def buyer(self, **kw):
++        n = next(_counter)
++        kw.setdefault("company_name", f"Buyer Co {n}")
++        kw.setdefault("email", f"buyer{n}@example.test")
++        return self._add(models.Buyer(password_hash="x", location="Raipur", **kw))
++
++    def transporter(self, **kw):
++        n = next(_counter)
++        kw.setdefault("name", f"Transporter {n}")
++        kw.setdefault("email", f"transporter{n}@example.test")
++        return self._add(models.Transporter(password_hash="x", **kw))
++
++    # ---- records ----
++    def txn(self, farmer, buyer, status="COMPLETED", total=1000.0):
++        return self._add(models.Transaction(
++            farmer_id=farmer.id, buyer_id=buyer.id, final_price_per_kg=10.0,
++            quantity_kg=100.0, total_amount=total, status=status))
++
++    def rate(self, txn, rater_role, rater, ratee_role, ratee, rating=5.0, review=None):
++        return self._add(models.Rating(
++            transaction_id=txn.id, rater_role=rater_role, rater_id=rater.id,
++            ratee_role=ratee_role, ratee_id=ratee.id, rating=rating, review=review))
++
++    def trip(self, farmer, transporter=None, buyer=None, status="DELIVERED"):
++        return self._add(models.TransportRequest(
++            farmer_id=farmer.id, buyer_id=buyer.id if buyer else None,
++            transporter_id=transporter.id if transporter else None,
++            pickup_location="A", destination="B", status=status))
++
++    def transport_review(self, trip, reviewer_role, reviewer, reviewee_role, reviewee,
++                         rating=5.0, comment=None):
++        return self._add(models.TransportReview(
++            transport_request_id=trip.id, reviewer_role=reviewer_role, reviewer_id=reviewer.id,
++            reviewee_role=reviewee_role, reviewee_id=reviewee.id, rating=rating, comment=comment))
++
++    def trip_review(self, trip, farmer, review_type="TRANSPORTER", rating=5.0, comment=None):
++        return self._add(models.TripReview(
++            transport_request_id=trip.id, reviewer_farmer_id=farmer.id,
++            review_type=review_type, rating=rating, comment=comment, verified=True))
++
++    def payment(self, txn, buyer, farmer, status="PAID", is_demo=False):
++        return self._add(models.Payment(
++            transaction_id=txn.id, buyer_id=buyer.id, farmer_id=farmer.id,
++            amount=txn.total_amount, payment_status=status, is_demo=is_demo))
++
++    def verification(self, buyer, status, **kw):
++        return self._add(models.BuyerVerification(
++            buyer_id=buyer.id, verification_status=status, **kw))
++
++    # ---- http ----
++    @staticmethod
++    def auth(user, role):
++        return {"Authorization": "Bearer " + create_access_token(subject=user.email, role=role)}
++
++    @staticmethod
++    def admin_auth():
++        return {"Authorization": "Bearer " + create_access_token(
++            subject=settings.admin_username, role="admin")}
++
++    def get(self, path, headers=None):
++        return self.client.get(path, headers=headers)
++
++    def admin_get(self, path):
++        return self.client.get(path, headers=self.admin_auth())
++
++    def summary(self, role, subject):
++        r = self.admin_get(f"/trust/{role}s/{subject.id}")
++        assert r.status_code == 200, r.text
++        return r.json()
++
++
++@pytest.fixture()
++def env():
++    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
++                           poolclass=StaticPool)
++    Base.metadata.create_all(bind=engine)
++    Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
++
++    def override_get_db():
++        s = Session()
++        try:
++            yield s
++        finally:
++            s.close()
++
++    app.dependency_overrides[get_db] = override_get_db
++    db = Session()
++    yield Env(db, TestClient(app))
++    db.close()
++    app.dependency_overrides.pop(get_db, None)
++    engine.dispose()
++
++
++def rated_txns(env, farmer, buyer, n, ratee_role="farmer", rating=4.0, review=None, status="DELIVERED"):
++    """n distinct transactions, each rated once by the counterparty."""
++    for _ in range(n):
++        t = env.txn(farmer, buyer, status=status)
++        if ratee_role == "farmer":
++            env.rate(t, "buyer", buyer, "farmer", farmer, rating, review)
++        else:
++            env.rate(t, "farmer", farmer, "buyer", buyer, rating, review)
++
++
++# ===========================================================================
++# Legacy defaults are never evidence
++# ===========================================================================
++
++def test_new_farmer_with_legacy_rating_has_insufficient_data(env):
++    f = env.farmer()                       # model default Farmer.rating == 4.5
++    assert f.rating == 4.5
++    s = env.summary("farmer", f)
++    assert s["badges"] == []
++    assert s["flags"] == ["NOT_SUPPORTED", "INSUFFICIENT_DATA"]
++    assert s["verification"] == {"state": "NOT_SUPPORTED", "tier": None, "supported": False}
++    assert s["trade"]["rating"] == {"state": "INSUFFICIENT_DATA", "count": 0,
++                                    "average": None, "min_count": 3}
++    assert s["logistics"]["rating"]["average"] is None
++    assert "4.5" not in json.dumps(s)
++
++
++@pytest.mark.parametrize("reliability,payment", [(85.0, 90.0), (60.0, 60.0), (100.0, 100.0)])
++def test_new_buyer_with_legacy_scores_has_insufficient_data(env, reliability, payment):
++    b = env.buyer(reliability_score=reliability, payment_history_score=payment)
++    s = env.summary("buyer", b)
++    assert s["badges"] == []
++    assert s["flags"] == ["NOT_VERIFIED", "INSUFFICIENT_DATA"]
++    assert s["trade"]["payment_history"]["state"] == "INSUFFICIENT_DATA"
++    assert s["logistics"] is None
++    assert str(reliability) not in json.dumps(s)
++
++
++def test_new_transporter_has_insufficient_data_even_with_stored_rating(env):
++    t = env.transporter()
++    s = env.summary("transporter", t)
++    assert s["badges"] == [] and s["flags"] == ["NOT_SUPPORTED", "INSUFFICIENT_DATA"]
++    assert s["trade"] is None
++    # Stored aggregate is ignored: only real review rows count.
++    t2 = env.transporter(rating=4.9, rating_count=80)
++    s2 = env.summary("transporter", t2)
++    assert s2["badges"] == []
++    assert s2["logistics"]["rating"]["count"] == 0
++    assert s2["logistics"]["rating"]["average"] is None
++
++
++# ===========================================================================
++# Threshold boundaries
++# ===========================================================================
++
++@pytest.mark.parametrize("n,rated", [(0, False), (1, False), (2, False), (3, True), (4, True)])
++def test_rating_threshold_boundary(env, n, rated):
++    f, b = env.farmer(), env.buyer()
++    rated_txns(env, f, b, n, rating=4.0)
++    s = env.summary("farmer", f)
++    r = s["trade"]["rating"]
++    assert r["count"] == n
++    assert ("RATED" in s["badges"]) is rated
++    if rated:
++        assert r["state"] == "RATED" and r["average"] == 4.0
++    else:
++        assert r["state"] == "INSUFFICIENT_DATA" and r["average"] is None
++
++
++def test_rating_average_is_rounded_mean_of_real_ratings(env):
++    f, b = env.farmer(), env.buyer()
++    for v in (5.0, 4.0, 4.0):
++        t = env.txn(f, b, "DELIVERED")
++        env.rate(t, "buyer", b, "farmer", f, v)
++    assert env.summary("farmer", f)["trade"]["rating"]["average"] == 4.33
++
++
++def test_review_threshold_boundary(env):
++    f, b = env.farmer(), env.buyer()
++    for text in (None, "", "   \n"):
++        t = env.txn(f, b, "DELIVERED")
++        env.rate(t, "buyer", b, "farmer", f, 4.0, text)
++    s = env.summary("farmer", f)
++    assert s["trade"]["written_review_count"] == 0
++    assert s["trade"]["reviewed"] == "INSUFFICIENT_DATA"
++    assert "REVIEWED" not in s["badges"]
++
++    t = env.txn(f, b, "DELIVERED")
++    env.rate(t, "buyer", b, "farmer", f, 4.0, "Prompt and honest")
++    s = env.summary("farmer", f)
++    assert s["trade"]["written_review_count"] == 1
++    assert s["trade"]["reviewed"] == "REVIEWED"
++    assert "REVIEWED" in s["badges"]
++    assert "RATED" in s["badges"]           # 4 genuine ratings in total
++
++
++def test_review_without_enough_ratings_is_reviewed_but_not_rated(env):
++    f, b = env.farmer(), env.buyer()
++    t = env.txn(f, b, "DELIVERED")
++    env.rate(t, "buyer", b, "farmer", f, 5.0, "Great produce")
++    s = env.summary("farmer", f)
++    assert s["badges"] == ["REVIEWED"]
++    assert s["trade"]["rating"]["average"] is None
++
++
++def test_experience_threshold_and_completed_vs_incomplete_transactions(env):
++    f, b = env.farmer(), env.buyer()
++    for status in ("OFFER_ACCEPTED", "ORDER_CONFIRMED", "IN_TRANSIT", "DELIVERED",
++                   "PAYMENT_PENDING", "PAYMENT_RECEIVED", "CANCELLED"):
++        env.txn(f, b, status)
++    s = env.summary("farmer", f)
++    assert s["trade"]["completed_count"] == 0
++    assert s["trade"]["experience"] == "INSUFFICIENT_DATA"
++    assert "EXPERIENCE" not in s["badges"]
++
++    env.txn(f, b, "COMPLETED")
++    s = env.summary("farmer", f)
++    assert s["trade"]["completed_count"] == 1
++    assert s["trade"]["experience"] == "EXPERIENCE"
++    assert s["badges"] == ["EXPERIENCE"]
++
++    # Legacy lowercase rows count as COMPLETED, like transactions._normalize_status.
++    env.txn(f, env.buyer(), "completed")
++    s = env.summary("farmer", f)
++    assert s["trade"]["completed_count"] == 2
++    assert s["trade"]["distinct_counterparties"] == 2
++    assert env.summary("buyer", b)["trade"]["completed_count"] == 1
++
++
++def test_completed_vs_incomplete_trips(env):
++    f, t, t_other = env.farmer(), env.transporter(), env.transporter()
++    for status in ("REQUESTED", "MATCHED", "CONFIRMED", "PICKED_UP", "IN_TRANSIT", "CANCELLED"):
++        env.trip(f, t, status=status)
++    for who in (f, t):
++        s = env.summary("farmer" if who is f else "transporter", who)
++        assert s["logistics"]["completed_count"] == 0
++        assert s["logistics"]["experience"] == "INSUFFICIENT_DATA"
++
++    env.trip(f, t, status="DELIVERED")
++    env.trip(f, t, status="COMPLETED")
++    env.trip(f, t_other, status="DELIVERED")
++    env.trip(f, None, status="DELIVERED")        # legacy trip with no transporter
++    sf = env.summary("farmer", f)["logistics"]
++    assert sf["completed_count"] == 4
++    assert sf["distinct_counterparties"] == 2    # NULL transporter is not a counterparty
++    st = env.summary("transporter", t)
++    assert st["logistics"]["completed_count"] == 2
++    assert st["logistics"]["distinct_counterparties"] == 1
++    assert st["badges"] == ["EXPERIENCE"]
++
++
++# ===========================================================================
++# Role / id collisions (farmer 1, buyer 1 and transporter 1 all exist)
++# ===========================================================================
++
++def test_role_id_collisions_do_not_mix_signals(env):
++    f, b, t = env.farmer(), env.buyer(), env.transporter()
++    assert f.id == b.id == t.id == 1
++    # Three ratings about BUYER 1 only.
++    rated_txns(env, f, b, 3, ratee_role="buyer", rating=5.0, status="COMPLETED")
++    sb = env.summary("buyer", b)
++    sf = env.summary("farmer", f)
++    assert sb["trade"]["rating"]["count"] == 3 and sb["trade"]["rating"]["state"] == "RATED"
++    assert sf["trade"]["rating"]["count"] == 0
++    # Transport review about TRANSPORTER 1 only; trip owned by farmer 1 but
++    # served by transporter 2.
++    t2 = env.transporter()
++    trip = env.trip(f, t2, status="DELIVERED")
++    env.transport_review(trip, "farmer", f, "transporter", t2, 5.0, "good")
++    env.transport_review(env.trip(f, t, status="DELIVERED"), "farmer", f, "transporter", t, 3.0)
++    assert env.summary("transporter", t)["logistics"]["rating"]["count"] == 1
++    assert env.summary("transporter", t2)["logistics"]["rating"]["count"] == 1
++    # TransportReview whose reviewee is transporter #1 must not count for farmer #1.
++    assert env.summary("farmer", f)["logistics"]["rating"]["count"] == 0
++    # Completed trips: farmer 1 owns both; transporter 1 only served one.
++    assert env.summary("farmer", f)["logistics"]["completed_count"] == 2
++    assert env.summary("transporter", t)["logistics"]["completed_count"] == 1
++
++
++# ===========================================================================
++# TransportReview / TripReview de-duplication
++# ===========================================================================
++
++def test_transport_review_and_trip_review_are_deduplicated(env):
++    t, t2 = env.transporter(), env.transporter()
++    f1, f2 = env.farmer(), env.farmer()
++    r1 = env.trip(f1, t)      # reviewed through BOTH systems by the same farmer
++    r2 = env.trip(f1, t)      # TripReview only
++    r3 = env.trip(f2, t)      # TransportReview only
++    env.transport_review(r1, "farmer", f1, "transporter", t, 5.0, "on time")
++    env.trip_review(r1, f1, "TRANSPORTER", 1.0, "duplicate of the above")
++    env.trip_review(r2, f1, "TRANSPORTER", 4.0, "careful handling")
++    env.transport_review(r3, "farmer", f2, "transporter", t, 3.0)
++    # Must NOT count: other review types, and another transporter's trip.
++    env.trip_review(r3, f2, "JOURNEY", 1.0, "journey, not transporter")
++    env.trip_review(r2, f1, "FPO", 1.0, "fpo")
++    env.trip_review(env.trip(f2, t2), f2, "TRANSPORTER", 1.0, "someone else's transporter")
++
++    s = env.summary("transporter", t)["logistics"]
++    assert s["rating"]["count"] == 3
++    assert s["rating"] == {"state": "RATED", "count": 3, "average": 4.0, "min_count": 3}
++    assert s["written_review_count"] == 2          # "on time" + "careful handling"
++    assert env.summary("transporter", t2)["logistics"]["rating"]["count"] == 1
++
++
++def test_farmer_logistics_reviews_come_from_transporter_reviews_only(env):
++    f, t = env.farmer(), env.transporter()
++    trip = env.trip(f, t)
++    env.transport_review(trip, "transporter", t, "farmer", f, 4.0, "Ready at pickup")
++    env.trip_review(trip, f, "TRANSPORTER", 1.0, "farmer's own review is not about the farmer")
++    s = env.summary("farmer", f)["logistics"]
++    assert s["rating"]["count"] == 1 and s["written_review_count"] == 1
++    assert s["reviewed"] == "REVIEWED"
++
++
++# ===========================================================================
++# Buyer verification
++# ===========================================================================
++
++@pytest.mark.parametrize("internal,tier,state", [
++    ("PENDING", "INSUFFICIENT_VERIFICATION_EVIDENCE", "NOT_VERIFIED"),
++    ("UNDER_REVIEW", "SELF_DECLARED", "NOT_VERIFIED"),
++    ("VERIFIED", "PLATFORM_VERIFIED", "VERIFIED"),
++    ("REJECTED", "VERIFICATION_REJECTED", "NOT_VERIFIED"),
++    ("SUSPENDED", "VERIFICATION_REJECTED", "NOT_VERIFIED"),
++])
++def test_buyer_verification_state_mapping(env, internal, tier, state):
++    b = env.buyer(verification_status="verified" if internal == "VERIFIED" else "pending")
++    env.verification(b, internal)
++    s = env.summary("buyer", b)
++    assert s["verification"] == {"state": state, "tier": tier, "supported": True}
++    assert ("VERIFIED" in s["badges"]) is (state == "VERIFIED")
++    assert ("NOT_VERIFIED" in s["flags"]) is (state != "VERIFIED")
++    # The raw internal value must never leak: a suspended buyer shows as rejected.
++    assert "SUSPENDED" not in json.dumps(s)
++
++
++def test_buyer_without_any_record_is_not_verified(env):
++    s = env.summary("buyer", env.buyer())
++    assert s["verification"]["tier"] == "INSUFFICIENT_VERIFICATION_EVIDENCE"
++    assert s["flags"] == ["NOT_VERIFIED", "INSUFFICIENT_DATA"]
++
++
++def test_legacy_verified_flag_without_backing_record_is_not_honoured(env):
++    b = env.buyer(verification_status="verified")      # no BuyerVerification row
++    s = env.summary("buyer", b)
++    assert s["verification"]["state"] == "NOT_VERIFIED"
++    assert "VERIFIED" not in s["badges"]
++
++
++def test_admin_approve_and_suspend_flow_drives_trust_state(env):
++    b = env.buyer()
++    r = env.client.post("/buyer-verification", headers=env.auth(b, "buyer"),
++                        json={"business_name": "B", "gst_number": "22GSTSECRET1Z5"})
++    assert r.status_code == 200
++    assert env.summary("buyer", b)["verification"]["tier"] == "SELF_DECLARED"
++    assert env.client.patch(f"/buyer-verification/{b.id}/approve", headers=env.admin_auth()).status_code == 200
++    assert env.summary("buyer", b)["badges"] == ["VERIFIED"]
++    assert env.client.patch(f"/buyer-verification/{b.id}/suspend", headers=env.admin_auth()).status_code == 200
++    s = env.summary("buyer", b)
++    assert s["verification"]["state"] == "NOT_VERIFIED" and "VERIFIED" not in s["badges"]
++
++
++def test_seeded_verified_buyer_gets_a_proper_backing_record(env):
++    backed = env.buyer(email="seed-ok@demo", verification_status="verified")
++    pending = env.buyer(email="seed-pending@demo", verification_status="pending")
++    already = env.buyer(email="seed-has-row@demo", verification_status="verified")
++    non_demo = env.buyer(email="real-user@example.test", verification_status="verified")
++    env.verification(already, "VERIFIED", reviewed_by="real-admin")
++
++    demo = {"seed-ok@demo", "seed-pending@demo", "seed-has-row@demo"}
++    assert ensure_demo_buyer_verification_records(env.db, demo_emails=demo) == 1
++    assert ensure_demo_buyer_verification_records(env.db, demo_emails=demo) == 0   # idempotent
++
++    env.db.expire_all()
++    rec = env.db.query(models.BuyerVerification).filter_by(buyer_id=backed.id).one()
++    assert (rec.verification_status, rec.verification_method) == ("VERIFIED", "PLATFORM_VERIFIED")
++    assert rec.reviewed_by == "demo-seed" and "Demo" in rec.verification_notes
++    audit = env.db.query(models.BuyerVerificationAuditLog).filter_by(buyer_id=backed.id).one()
++    assert audit.new_status == "VERIFIED"
++    # untouched: pending demo buyer, buyer who already had a row, non-demo buyer
++    assert env.db.query(models.BuyerVerification).filter_by(buyer_id=pending.id).first() is None
++    assert env.db.query(models.BuyerVerification).filter_by(buyer_id=non_demo.id).first() is None
++    assert env.db.query(models.BuyerVerification).filter_by(buyer_id=already.id).one().reviewed_by == "real-admin"
++
++    assert env.summary("buyer", backed)["badges"] == ["VERIFIED"]
++    assert env.summary("buyer", non_demo)["verification"]["state"] == "NOT_VERIFIED"
++
++
++def test_default_demo_buyers_all_get_backing_records(env):
++    for i, d in enumerate(DEMO_BUYERS):
++        env.buyer(email=d["email"], company_name=d["company_name"],
++                  verification_status=d["verification_status"])
++    ensure_demo_buyer_verification_records(env.db)
++    for b in env.db.query(models.Buyer).all():
++        has = env.db.query(models.BuyerVerification).filter_by(buyer_id=b.id).first() is not None
++        assert has is (b.verification_status == "verified")
++        assert (env.summary("buyer", b)["verification"]["state"] == "VERIFIED") is (b.verification_status == "verified")
++
++
++# ===========================================================================
++# Payment history evidence
++# ===========================================================================
++
++def test_demo_payments_are_excluded_from_payment_history(env):
++    f, b, other = env.farmer(), env.buyer(), env.buyer()
++    for _ in range(5):
++        env.payment(env.txn(f, b), b, f, "PAID", is_demo=True)
++    ph = env.summary("buyer", b)["trade"]["payment_history"]
++    assert ph == {"state": "INSUFFICIENT_DATA", "non_demo_paid_count": 0, "min_count": 3}
++
++    env.payment(env.txn(f, b), b, f, "PAID", is_demo=False)
++    env.payment(env.txn(f, b), b, f, "INITIATED", is_demo=False)     # not PAID
++    env.payment(env.txn(f, other), other, f, "PAID", is_demo=False)  # someone else's
++    assert env.summary("buyer", b)["trade"]["payment_history"]["non_demo_paid_count"] == 1
++    env.payment(env.txn(f, b), b, f, "PAID", is_demo=False)
++    assert env.summary("buyer", b)["trade"]["payment_history"]["state"] == "INSUFFICIENT_DATA"
++    env.payment(env.txn(f, b), b, f, "PAID", is_demo=False)
++    ph = env.summary("buyer", b)["trade"]["payment_history"]
++    assert ph == {"state": "AVAILABLE", "non_demo_paid_count": 3, "min_count": 3}
++    assert env.summary("farmer", f)["trade"]["payment_history"] is None
++
++
++# ===========================================================================
++# Privacy whitelist
++# ===========================================================================
++
++ALLOWED_KEYS = {
++    "subject", "role", "id", "badges", "flags", "verification", "state", "tier", "supported",
++    "trade", "logistics", "thresholds", "reason_codes", "code", "params",
++    "completed_count", "distinct_counterparties", "experience", "rating", "count", "average",
++    "min_count", "written_review_count", "reviewed", "payment_history", "non_demo_paid_count",
++    "min_ratings_for_average", "min_written_reviews", "min_completed_for_experience",
++    "min_non_demo_payments", "context", "min",
++}
++
++
++def _keys(node, acc):
++    if isinstance(node, dict):
++        for k, v in node.items():
++            acc.add(k)
++            _keys(v, acc)
++    elif isinstance(node, list):
++        for v in node:
++            _keys(v, acc)
++    return acc
++
++
++def test_privacy_whitelist_and_no_secret_values(env):
++    f = env.farmer(email="secret-farmer@leak.test", phone="+91-SECRETPHONE", rating=4.123)
++    b = env.buyer(email="secret-buyer@leak.test", phone="+91-BUYERPHONE",
++                  reliability_score=77.7, payment_history_score=66.6)
++    t = env.transporter(email="secret-trans@leak.test", phone="+91-TRANSPHONE",
++                        business_name="SecretHaulage", rating=3.21, rating_count=17)
++    env.verification(b, "VERIFIED", gst_number="22SECRETGSTZ5", license_number="LIC-SECRET",
++                     business_registration_number="CIN-SECRET", document_urls=["demo://secret.pdf"],
++                     verification_notes="SECRET-ADMIN-NOTE", reviewed_by="secret-admin")
++    for i in range(3):
++        tx = env.txn(f, b, "COMPLETED", total=54321.0 + i)
++        env.rate(tx, "buyer", b, "farmer", f, 4.0, "SECRET-REVIEW-TEXT")
++        env.rate(tx, "farmer", f, "buyer", b, 5.0, "SECRET-REVIEW-TEXT-2")
++        env.payment(tx, b, f, "PAID", is_demo=False)
++        trip = env.trip(f, t, b)
++        env.transport_review(trip, "farmer", f, "transporter", t, 5.0, "SECRET-TRANSPORT-COMMENT")
++        env.transport_review(trip, "transporter", t, "farmer", f, 4.0, "SECRET-TRANSPORT-COMMENT-2")
++    for role, who in (("farmer", f), ("buyer", b), ("transporter", t)):
++        r = env.admin_get(f"/trust/{role}s/{who.id}")
++        assert r.status_code == 200
++        body = r.json()
++        assert _keys(body, set()) <= ALLOWED_KEYS, _keys(body, set()) - ALLOWED_KEYS
++        for secret in ("SECRET", "leak.test", "PHONE", "54321", "4.123", "77.7", "66.6", "3.21",
++                       "password", "token", "email", "gst", "document", "transaction", "reviewer"):
++            assert secret.lower() not in r.text.lower(), secret
++
++
++# ===========================================================================
++# Authentication / authorization
++# ===========================================================================
++
++def test_unauthenticated_requests_get_401(env):
++    f = env.farmer()
++    for path in ("/trust/me", f"/trust/farmers/{f.id}", "/trust/buyers/1", "/trust/transporters/1"):
++        assert env.get(path).status_code == 401
++        assert env.get(path, {"Authorization": "Bearer not-a-token"}).status_code == 401
++
++
++def test_me_returns_own_summary_and_admin_has_none(env):
++    f, b, t = env.farmer(), env.buyer(), env.transporter()
++    for role, who in (("farmer", f), ("buyer", b), ("transporter", t)):
++        r = env.get("/trust/me", env.auth(who, role))
++        assert r.status_code == 200
++        assert r.json()["subject"] == {"role": role, "id": who.id}
++    r = env.get("/trust/me", env.admin_auth())
++    assert r.status_code == 404 and r.json()["detail"] == "Trust profile not found"
++
++
++def test_unauthorized_is_identical_to_nonexistent(env):
++    fA, tB = env.farmer(), env.transporter()
++    unauthorized = env.get(f"/trust/farmers/{fA.id}", env.auth(tB, "transporter"))
++    nonexistent = env.get("/trust/farmers/9999", env.auth(tB, "transporter"))
++    assert unauthorized.status_code == nonexistent.status_code == 404
++    assert unauthorized.json() == nonexistent.json() == {"detail": "Trust profile not found"}
++    # Same for a nonexistent subject the viewer would otherwise be allowed to see.
++    assert env.get("/trust/buyers/9999", env.auth(fA, "farmer")).json() == nonexistent.json()
++
++
++def test_full_visibility_matrix(env):
++    fA, fB = env.farmer(), env.farmer()
++    bA, bB = env.buyer(), env.buyer()
++    t1, t2 = env.transporter(), env.transporter()
++    env.trip(fA, t1, bA, status="CONFIRMED")          # the only relationship
++    viewers = {"admin": None, "fA": (fA, "farmer"), "fB": (fB, "farmer"), "bA": (bA, "buyer"),
++               "bB": (bB, "buyer"), "t1": (t1, "transporter"), "t2": (t2, "transporter")}
++    subjects = {"fA": ("farmer", fA), "fB": ("farmer", fB), "bA": ("buyer", bA),
++                "bB": ("buyer", bB), "t1": ("transporter", t1), "t2": ("transporter", t2)}
++    allowed = {
++        "admin": {"fA", "fB", "bA", "bB", "t1", "t2"},
++        "fA": {"fA", "fB", "bA", "bB", "t1"},
++        "fB": {"fA", "fB", "bA", "bB"},
++        "bA": {"fA", "fB", "bA", "t1"},
++        "bB": {"fA", "fB", "bB"},
++        "t1": {"fA", "t1"},
++        "t2": {"t2"},
++    }
++    for vname, viewer in viewers.items():
++        headers = env.admin_auth() if viewer is None else env.auth(*viewer)
++        for sname, (role, subj) in subjects.items():
++            r = env.get(f"/trust/{role}s/{subj.id}", headers)
++            expected = 200 if sname in allowed[vname] else 404
++            assert r.status_code == expected, (vname, sname, r.status_code)
++            if expected == 404:
++                assert r.json() == {"detail": "Trust profile not found"}
++            else:
++                assert r.json()["subject"] == {"role": role, "id": subj.id}
++
++
++def test_id_overlap_cannot_be_used_to_reach_another_role(env):
++    """Buyer #1 and transporter #1 share an id; passing as one must not
++    grant the other's relationship-based visibility."""
++    f, t = env.farmer(), env.transporter()
++    b = env.buyer()
++    assert t.id == b.id == 1
++    env.trip(f, t, None, status="DELIVERED")           # t is assigned to f; b is not related
++    assert env.get(f"/trust/farmers/{f.id}", env.auth(t, "transporter")).status_code == 200
++    # buyer #1 may see farmers (public directory) but NOT transporter #1.
++    assert env.get(f"/trust/transporters/{t.id}", env.auth(b, "buyer")).status_code == 404
++
++
++def test_trust_summary_service_is_read_only_and_none_for_unknown(env):
++    assert trust_summary.build_trust_summary(env.db, "farmer", 12345) is None
++    assert trust_summary.build_trust_summary(env.db, "admin", 1) is None
++
++
++# ===========================================================================
++# Regression: existing verification / rating endpoints
++# ===========================================================================
++
++def test_public_buyer_verification_no_longer_leaks_private_details(env):
++    b = env.buyer(verification_status="verified")
++    env.verification(
++        b, "VERIFIED", business_name="Secret Biz Pvt", gst_number="22GSTSECRET1Z5",
++        license_number="LIC-SECRET", business_registration_number="CIN-SECRET",
++        document_urls=["demo://secret-doc.pdf"], verification_notes="SECRET-ADMIN-NOTE",
++        verification_method="PLATFORM_VERIFIED", reviewed_by="secret-admin",
++        verified_at=dt.datetime(2026, 1, 2, 3, 4, 5))
++    r = env.get(f"/buyer-verification/{b.id}")           # no auth: still public
++    assert r.status_code == 200
++    body = r.json()
++    assert set(body) == {"buyer_id", "display_status", "display_label",
++                         "display_description", "verified_at"}
++    assert body["display_status"] == "PLATFORM_VERIFIED" and body["verified_at"] is not None
++    for secret in ("SECRET", "GST", "LIC-", "CIN-", "demo://", "document", "reviewed_by"):
++        assert secret.lower() not in r.text.lower(), secret
++
++
++def test_public_buyer_verification_hides_suspension_and_stale_verified_at(env):
++    b = env.buyer()
++    env.verification(b, "SUSPENDED", verified_at=dt.datetime(2026, 1, 2), verification_notes="fraud?")
++    body = env.get(f"/buyer-verification/{b.id}").json()
++    assert body["display_status"] == "VERIFICATION_REJECTED"
++    assert body["verified_at"] is None
++    assert "SUSPENDED" not in json.dumps(body) and "fraud" not in json.dumps(body)
++    assert env.get("/buyer-verification/9999").status_code == 404
++
++
++def test_owner_and_admin_verification_views_remain_complete(env):
++    b = env.buyer()
++    env.verification(b, "UNDER_REVIEW", gst_number="22GSTSECRET1Z5", document_urls=["demo://d.pdf"])
++    mine = env.get("/buyer-verification/me", env.auth(b, "buyer"))
++    assert mine.status_code == 200
++    assert mine.json()["gst_number"] == "22GSTSECRET1Z5" and mine.json()["document_urls"] == ["demo://d.pdf"]
++    listing = env.get("/buyer-verification?status=UNDER_REVIEW", env.admin_auth())
++    assert listing.status_code == 200 and listing.json()[0]["gst_number"] == "22GSTSECRET1Z5"
++    assert env.get("/buyer-verification", env.auth(b, "buyer")).status_code == 403
++    badge = env.get(f"/buyer-verification/{b.id}/badge").json()
++    assert set(badge) == {"buyer_id", "status", "label", "description"}
++
++
++def test_existing_rating_endpoints_unchanged(env):
++    f, b = env.farmer(), env.buyer()
++    done, early = env.txn(f, b, "COMPLETED"), env.txn(f, b, "OFFER_ACCEPTED")
++    h = env.auth(f, "farmer")
++    ok = env.client.post("/ratings/farmer-rates-buyer", headers=h,
++                         json={"transaction_id": done.id, "rating": 4, "review": "fine"})
++    assert ok.status_code == 200 and ok.json()["ratee_role"] == "buyer"
++    assert env.client.post("/ratings/farmer-rates-buyer", headers=h,
++                           json={"transaction_id": done.id, "rating": 4}).status_code == 409
++    assert env.client.post("/ratings/farmer-rates-buyer", headers=h,
++                           json={"transaction_id": early.id, "rating": 4}).status_code == 400
++    listing = env.get(f"/ratings/for-buyer/{b.id}").json()
++    assert set(listing) == {"buyer_id", "total_ratings", "average_rating", "ratings"}
++    assert listing["total_ratings"] == 1 and listing["average_rating"] == 4.0
++    # ...and the new summary sees the same row without any write having happened.
++    assert env.summary("buyer", b)["trade"]["rating"]["count"] == 1
