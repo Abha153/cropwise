@@ -27,3 +27,5 @@ Thumbs.db
 
 # Local backup/archive files
 *.zip
+**/.venv/
+**/__pycache__/

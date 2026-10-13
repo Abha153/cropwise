@@ -3,10 +3,10 @@ Unit tests for the honesty-critical data-source logic in
 app/services/mandi_directory.py and app/routers/market.py's _get_price().
 
 These tests do NOT touch the network -- every live_market_data /
-district_market_data call is monkeypatched to a controlled outcome, so
-they verify the STATUS-ROUTING LOGIC (ok / no_records / error /
-not_configured -> correct label / correct fallback-or-not) rather than
-anything about the real data.gov.in API, which this sandbox cannot reach.
+district_market_data call is monkeypatched to a controlled outcome, and
+the optional Agmarknet provider is disabled, so they verify the
+STATUS-ROUTING LOGIC (ok / no_records / error / not_configured -> correct
+label / correct fallback-or-not) rather than any external API behavior.
 
 Run with: pytest backend/tests/test_mandi_directory.py -v
 """
@@ -17,7 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from app.services import mandi_directory, live_market_data, district_market_data
+from app.services import (
+    mandi_directory, live_market_data, district_market_data, agmarknet_service,
+)
 
 
 MARKET_OK = {
@@ -54,6 +56,7 @@ def _no_real_discovery(monkeypatch):
     a real HTTP call, and never let stale in-process caches leak between
     tests."""
     monkeypatch.setattr(mandi_directory, "discover_state_markets", lambda state="Chhattisgarh": [])
+    monkeypatch.setattr(agmarknet_service, "is_configured", lambda: False)
     mandi_directory._discovery_cache.clear()
     live_market_data._cache.clear()
     district_market_data._cache.clear()

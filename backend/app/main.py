@@ -18,6 +18,7 @@ from app.routers import weather
 from app.routers import offer_negotiation
 from app.routers import transporters, transport_negotiation
 from app.routers import trust
+from app.routers import price_forecast_ml
 
 Base.metadata.create_all(bind=engine)
 run_lightweight_migrations()
@@ -130,6 +131,7 @@ app.include_router(offer_negotiation.router)  # after offers.router: static /off
 app.include_router(market.router)
 app.include_router(advisor.router)
 app.include_router(forecast.router)
+app.include_router(price_forecast_ml.router)
 app.include_router(matching.router)
 app.include_router(logistics.router)
 app.include_router(profit.router)
