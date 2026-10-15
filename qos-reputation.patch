@@ -1,0 +1,1127 @@
+diff --git a/README.md b/README.md
+index ff1ae04..e10b911 100644
+--- a/README.md
++++ b/README.md
+@@ -205,6 +205,8 @@ Real, server-validated CRUD: listings/lots, buyer offers, accept/reject with dup
+ 
+ **Negotiation workflow** (`/negotiations`): Offer → Counteroffer → Accept / Reject → Agreement → Transaction record. Each round stores the full terms (price, quantity, quality grade/notes, pickup mode and date, delivery location and deadline) and who proposed it; only the party an open proposal was made *to* can counter, accept or reject it, and the proposer can withdraw it (max 12 rounds). Accepting writes an immutable agreement snapshot with a SHA-256 fingerprint of the agreed terms in the same database transaction as the `Transaction`, plus an `AGREEMENT_RECORDED` timeline event. Offers created before this feature get their round history created lazily; nothing needs migrating. It records what both parties agreed — it does not enforce delivery or payment.
+ 
++**Partner reputation / QoS** (`/reputation`): evidence-based profiles for buyers and transport agencies, computed only from recorded trips, transactions, farmer-recorded outcomes and complaints — no seeded or default scores (the legacy `Buyer.reliability_score` / `payment_history_score` columns are not read). Every indicator shows its sample size and latest event; indicators with no evidence read "not recorded", and partners with fewer than 3 completed outcomes are labelled "Insufficient history". Ranking uses a 95% Wilson lower bound, so a small perfect record cannot outrank a large good one. Simulated payments are excluded. A rated partner can contest any single piece of evidence; it is left out of their rates while an admin reviews it. Buyer pickup/terms outcomes and a trip's final charge exist only once a farmer records them.
++
+ ## Transport / Net Realization
+ 
+ Transport cost is modelled per trip: vehicle-class selection (mini pickup / LCV / medium truck), diesel price, driver cost, maintenance, vehicle overhead, tolls beyond a free radius, an empty return leg, and a minimum-trip floor — all labelled as tunable reference assumptions, not official tariffs. This is the *same* calculator used everywhere a transport figure appears (market comparison, buyer matching, AgriAdvisor, profit calculator, FarmPool, admin impact dashboard) — there is no second copy of this logic anywhere in the codebase.
+diff --git a/backend/app/database.py b/backend/app/database.py
+index 318b4be..b358f13 100644
+--- a/backend/app/database.py
++++ b/backend/app/database.py
+@@ -130,6 +130,13 @@ def run_lightweight_migrations():
+             add_column_if_missing("transport_requests", "transporter_agreed_price", "FLOAT")
+             add_column_if_missing("transport_requests", "transporter_agreed_at", "DATETIME")
+             add_column_if_missing("transport_requests", "completed_at", "DATETIME")
++
++            # Reputation / QoS evidence columns (nullable, never back-filled)
++            add_column_if_missing("transport_requests", "final_charge", "FLOAT")
++            add_column_if_missing("transport_requests", "final_charge_recorded_at", "DATETIME")
++            add_column_if_missing("transport_requests", "cancelled_by", "VARCHAR")
++            add_column_if_missing("transport_requests", "cancelled_at", "DATETIME")
++            add_column_if_missing("transport_requests", "promised_delivery_by", "VARCHAR")
+         return
+ 
+     # Postgres path: only the columns added after the Supabase migration.
+@@ -211,4 +218,19 @@ def run_lightweight_migrations():
+         conn.execute(text(
+             "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP"
+         ))
++        conn.execute(text(
++            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS final_charge DOUBLE PRECISION"
++        ))
++        conn.execute(text(
++            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS final_charge_recorded_at TIMESTAMP"
++        ))
++        conn.execute(text(
++            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR"
++        ))
++        conn.execute(text(
++            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP"
++        ))
++        conn.execute(text(
++            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS promised_delivery_by VARCHAR"
++        ))
+         conn.commit()
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 7ddf013..c8b37d0 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -15,7 +15,7 @@ from app.routers import lots, buyer_demands, buyer_verification
+ from app.routers import transactions, payments, grievances, receipts
+ from app.routers import storage, transport, ratings, trip_reviews
+ from app.routers import weather
+-from app.routers import transporters, transport_negotiation, negotiations
++from app.routers import transporters, transport_negotiation, negotiations, reputation
+ 
+ Base.metadata.create_all(bind=engine)
+ run_lightweight_migrations()
+@@ -126,4 +126,5 @@ app.include_router(transporters.router)
+ app.include_router(transport_negotiation.router)
+ app.include_router(ratings.router)
+ app.include_router(trip_reviews.router)
++app.include_router(reputation.router)
+ app.include_router(weather.router)
+diff --git a/backend/app/models.py b/backend/app/models.py
+index 16a2cf2..18d190c 100644
+--- a/backend/app/models.py
++++ b/backend/app/models.py
+@@ -514,6 +514,18 @@ class TransportRequest(Base):
+     transporter_agreed_at = Column(DateTime, nullable=True)
+     completed_at = Column(DateTime, nullable=True)
+ 
++    # --- Reputation / QoS evidence (all nullable; nothing is back-filled) ---
++    # Charge the farmer was actually billed, recorded after the trip. Compared
++    # with transporter_agreed_price (or legacy agreed_price) for quote accuracy.
++    final_charge = Column(Float, nullable=True)
++    final_charge_recorded_at = Column(DateTime, nullable=True)
++    # Who cancelled: "farmer" / "transporter". NULL = not recorded (legacy rows),
++    # which is never counted against either party.
++    cancelled_by = Column(String, nullable=True)
++    cancelled_at = Column(DateTime, nullable=True)
++    # ISO date by which delivery was promised; NULL = no deadline recorded.
++    promised_delivery_by = Column(String, nullable=True)
++
+     created_at = Column(DateTime, default=now)
+     updated_at = Column(DateTime, default=now, onupdate=now)
+ 
+@@ -813,3 +825,56 @@ class NegotiationAgreement(Base):
+     terms_hash = Column(String, nullable=False)         # SHA-256 of the canonical terms JSON
+     rounds_count = Column(Integer, nullable=False)
+     agreed_at = Column(DateTime, default=now)
++
++
++class PerformanceRecord(Base):
++    """A recorded, attributable outcome about a partner on one transaction
++    (QoS / reputation evidence). Written by the farmer who was party to the
++    transaction; the partner may contest it via ReputationDispute. Never
++    created automatically and never given a default value.
++
++    metric / result:
++      BUYER_PICKUP -- ON_TIME / LATE / NO_SHOW
++      BUYER_TERMS  -- AS_AGREED / DEVIATED   (price, quantity, quality as
++                      recorded in the negotiation agreement)
++    """
++    __tablename__ = "performance_records"
++    __table_args__ = (
++        UniqueConstraint("transaction_id", "metric", name="uq_performance_record_per_txn_metric"),
++    )
++
++    id = Column(Integer, primary_key=True, index=True)
++    subject_role = Column(String, nullable=False)       # "buyer"
++    subject_id = Column(Integer, nullable=False, index=True)
++    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False, index=True)
++    metric = Column(String, nullable=False)
++    result = Column(String, nullable=False)
++    note = Column(Text, nullable=True)
++    recorded_by_role = Column(String, nullable=False)
++    recorded_by_id = Column(Integer, nullable=False)
++    created_at = Column(DateTime, default=now)
++
++
++class ReputationDispute(Base):
++    """Right-of-reply for a rated partner. A partner contests one specific
++    piece of evidence. While OPEN / UNDER_REVIEW the contested item is left
++    out of that partner's rates (and shown as 'under review'); an admin then
++    UPHOLDs (item stays excluded) or REJECTs (item counts again)."""
++    __tablename__ = "reputation_disputes"
++    __table_args__ = (
++        UniqueConstraint("target_type", "target_id", "subject_role", "subject_id",
++                         name="uq_reputation_dispute_per_target"),
++    )
++
++    id = Column(Integer, primary_key=True, index=True)
++    subject_role = Column(String, nullable=False)       # "buyer" / "transporter"
++    subject_id = Column(Integer, nullable=False, index=True)
++    target_type = Column(String, nullable=False)        # PERFORMANCE_RECORD / TRANSPORT_REQUEST
++    target_id = Column(Integer, nullable=False)
++    reason = Column(Text, nullable=False)
++    evidence_urls = Column(JSON, default=list)
++    status = Column(String, default="OPEN", nullable=False)  # OPEN / UNDER_REVIEW / UPHELD / REJECTED
++    admin_note = Column(Text, nullable=True)
++    created_at = Column(DateTime, default=now)
++    updated_at = Column(DateTime, default=now, onupdate=now)
++    resolved_at = Column(DateTime, nullable=True)
+diff --git a/backend/app/routers/reputation.py b/backend/app/routers/reputation.py
+new file mode 100644
+index 0000000..afc06d7
+--- /dev/null
++++ b/backend/app/routers/reputation.py
+@@ -0,0 +1,274 @@
++"""
++Partner reputation / QoS -- buyers and transport agencies.
++
++Read endpoints return evidence-derived profiles (see services/reputation.py
++for the rules). Write endpoints only *record facts* (an outcome, a final
++charge, a delivery promise) or handle a partner's right of reply (disputes).
++Nothing here ever writes a score.
++"""
++import datetime as dt
++from typing import List, Optional
++
++from fastapi import APIRouter, Depends, HTTPException
++from pydantic import BaseModel, Field
++from sqlalchemy.orm import Session
++
++from app import models
++from app.auth_utils import get_current_user, require_admin, require_farmer
++from app.database import get_db
++from app.routers.transactions import _add_event
++from app.services import reputation as rep
++
++router = APIRouter(prefix="/reputation", tags=["reputation"])
++
++DISPUTE_TARGETS = {"PERFORMANCE_RECORD", "TRANSPORT_REQUEST"}
++ADMIN_DISPUTE_STATUSES = {"UNDER_REVIEW", "UPHELD", "REJECTED"}
++PRE_PICKUP = ("REQUESTED", "MATCHED", "CONFIRMED")
++
++
++# ── schemas ──────────────────────────────────────────────────────────────────
++class PerformanceRecordIn(BaseModel):
++    transaction_id: int
++    metric: str
++    result: str
++    note: Optional[str] = Field(default=None, max_length=1000)
++
++
++class FinalChargeIn(BaseModel):
++    final_charge: float = Field(gt=0)
++
++
++class DeliveryPromiseIn(BaseModel):
++    promised_delivery_by: str       # ISO date, YYYY-MM-DD
++
++
++class DisputeIn(BaseModel):
++    target_type: str
++    target_id: int
++    reason: str = Field(min_length=10, max_length=2000)
++    evidence_urls: List[str] = []
++
++
++class DisputeDecisionIn(BaseModel):
++    status: str
++    admin_note: Optional[str] = Field(default=None, max_length=2000)
++
++
++def _dispute_dict(d: models.ReputationDispute) -> dict:
++    return {
++        "id": d.id, "subject_role": d.subject_role, "subject_id": d.subject_id,
++        "target_type": d.target_type, "target_id": d.target_id, "reason": d.reason,
++        "evidence_urls": d.evidence_urls or [], "status": d.status, "admin_note": d.admin_note,
++        "created_at": d.created_at.isoformat() if d.created_at else None,
++        "resolved_at": d.resolved_at.isoformat() if d.resolved_at else None,
++    }
++
++
++# ── read: methodology + profiles ─────────────────────────────────────────────
++@router.get("/methodology")
++def get_methodology():
++    return rep.methodology()
++
++
++@router.get("/transporters")
++def list_transporter_profiles(current=Depends(get_current_user), db: Session = Depends(get_db)):
++    now = dt.datetime.utcnow()
++    ids = [t.id for t in db.query(models.Transporter.id).all()]
++    profiles = [p for p in (rep.transporter_profile(db, i, now) for i in ids) if p]
++    return rep.rank_profiles(profiles)
++
++
++@router.get("/transporters/{transporter_id}")
++def get_transporter_profile(transporter_id: int, current=Depends(get_current_user),
++                            db: Session = Depends(get_db)):
++    p = rep.transporter_profile(db, transporter_id)
++    if not p:
++        raise HTTPException(status_code=404, detail="Transport agency not found")
++    return p
++
++
++@router.get("/buyers")
++def list_buyer_profiles(current=Depends(get_current_user), db: Session = Depends(get_db)):
++    now = dt.datetime.utcnow()
++    ids = [b.id for b in db.query(models.Buyer.id).all()]
++    profiles = [p for p in (rep.buyer_profile(db, i, now) for i in ids) if p]
++    return rep.rank_profiles(profiles)
++
++
++@router.get("/buyers/{buyer_id}")
++def get_buyer_profile(buyer_id: int, current=Depends(get_current_user), db: Session = Depends(get_db)):
++    p = rep.buyer_profile(db, buyer_id)
++    if not p:
++        raise HTTPException(status_code=404, detail="Buyer not found")
++    return p
++
++
++# ── read: the evidence behind MY profile (so I can see and contest it) ───────
++@router.get("/me/evidence")
++def my_evidence(current=Depends(get_current_user), db: Session = Depends(get_db)):
++    role, user = current["role"], current["user"]
++    if role == "transporter":
++        reqs = (db.query(models.TransportRequest)
++                .filter(models.TransportRequest.transporter_id == user.id)
++                .order_by(models.TransportRequest.id.desc()).all())
++        return {"role": role, "items": [{
++            "target_type": "TRANSPORT_REQUEST", "target_id": r.id, "status": r.status,
++            "scheduled_pickup": r.pickup_date, "picked_up_at": r.picked_up_at.isoformat() if r.picked_up_at else None,
++            "agreed_price": r.transporter_agreed_price if r.transporter_agreed_price is not None else r.agreed_price,
++            "final_charge": r.final_charge, "cancelled_by": r.cancelled_by,
++            "promised_delivery_by": r.promised_delivery_by,
++            "delivered_at": r.delivered_at.isoformat() if r.delivered_at else None,
++        } for r in reqs]}
++    if role == "buyer":
++        recs = (db.query(models.PerformanceRecord)
++                .filter(models.PerformanceRecord.subject_role == "buyer",
++                        models.PerformanceRecord.subject_id == user.id)
++                .order_by(models.PerformanceRecord.id.desc()).all())
++        return {"role": role, "items": [{
++            "target_type": "PERFORMANCE_RECORD", "target_id": r.id, "transaction_id": r.transaction_id,
++            "metric": r.metric, "result": r.result, "note": r.note,
++            "recorded_at": r.created_at.isoformat() if r.created_at else None,
++        } for r in recs]}
++    raise HTTPException(status_code=403, detail="Only buyers and transport agencies have a reputation profile")
++
++
++# ── write: record facts (farmer side) ────────────────────────────────────────
++@router.post("/records", status_code=201)
++def record_buyer_outcome(payload: PerformanceRecordIn, farmer=Depends(require_farmer),
++                         db: Session = Depends(get_db)):
++    metric, result = payload.metric.upper(), payload.result.upper()
++    if metric not in rep.BUYER_METRICS:
++        raise HTTPException(status_code=400, detail=f"metric must be one of {sorted(rep.BUYER_METRICS)}")
++    if result not in rep.BUYER_METRICS[metric]:
++        raise HTTPException(status_code=400, detail=f"result for {metric} must be one of {sorted(rep.BUYER_METRICS[metric])}")
++    txn = db.query(models.Transaction).filter(models.Transaction.id == payload.transaction_id).first()
++    if not txn or txn.farmer_id != farmer.id:
++        raise HTTPException(status_code=404, detail="Transaction not found")
++    if db.query(models.PerformanceRecord).filter(
++            models.PerformanceRecord.transaction_id == txn.id,
++            models.PerformanceRecord.metric == metric).first():
++        raise HTTPException(status_code=409, detail="This outcome is already recorded for the transaction")
++    rec = models.PerformanceRecord(
++        subject_role="buyer", subject_id=txn.buyer_id, transaction_id=txn.id,
++        metric=metric, result=result, note=payload.note,
++        recorded_by_role="farmer", recorded_by_id=farmer.id)
++    db.add(rec)
++    _add_event(db, txn.id, "PERFORMANCE_RECORDED",
++               f"Farmer recorded {metric} = {result}", "farmer", farmer.id)
++    db.commit()
++    db.refresh(rec)
++    return {"id": rec.id, "metric": rec.metric, "result": rec.result, "transaction_id": rec.transaction_id}
++
++
++@router.post("/transport/{request_id}/final-charge")
++def record_final_charge(request_id: int, payload: FinalChargeIn, farmer=Depends(require_farmer),
++                        db: Session = Depends(get_db)):
++    r = db.query(models.TransportRequest).filter(models.TransportRequest.id == request_id).first()
++    if not r or r.farmer_id != farmer.id:
++        raise HTTPException(status_code=404, detail="Transport request not found")
++    if r.status not in rep.COMPLETED_TRANSPORT:
++        raise HTTPException(status_code=400, detail="Final charge can be recorded only after delivery")
++    if r.final_charge is not None:
++        raise HTTPException(status_code=409, detail="Final charge is already recorded; the agency can contest it")
++    r.final_charge = payload.final_charge
++    r.final_charge_recorded_at = dt.datetime.utcnow()
++    db.commit()
++    return {"request_id": r.id, "final_charge": r.final_charge}
++
++
++@router.post("/transport/{request_id}/delivery-promise")
++def record_delivery_promise(request_id: int, payload: DeliveryPromiseIn, current=Depends(get_current_user),
++                            db: Session = Depends(get_db)):
++    role, user = current["role"], current["user"]
++    r = db.query(models.TransportRequest).filter(models.TransportRequest.id == request_id).first()
++    is_party = r and ((role == "farmer" and r.farmer_id == user.id)
++                      or (role == "transporter" and r.transporter_id == user.id))
++    if not is_party:
++        raise HTTPException(status_code=404, detail="Transport request not found")
++    try:
++        dt.date.fromisoformat(payload.promised_delivery_by)
++    except ValueError:
++        raise HTTPException(status_code=400, detail="promised_delivery_by must be an ISO date (YYYY-MM-DD)")
++    if r.status not in PRE_PICKUP:
++        raise HTTPException(status_code=400, detail="A delivery promise can be set only before pickup")
++    if r.promised_delivery_by:
++        raise HTTPException(status_code=409, detail="A delivery promise is already recorded")
++    r.promised_delivery_by = payload.promised_delivery_by
++    db.commit()
++    return {"request_id": r.id, "promised_delivery_by": r.promised_delivery_by, "recorded_by": role}
++
++
++# ── right of reply: disputes ─────────────────────────────────────────────────
++@router.post("/disputes", status_code=201)
++def raise_dispute(payload: DisputeIn, current=Depends(get_current_user), db: Session = Depends(get_db)):
++    role, user = current["role"], current["user"]
++    if role not in ("buyer", "transporter"):
++        raise HTTPException(status_code=403, detail="Only the rated partner can contest its own evidence")
++    target = payload.target_type.upper()
++    if target not in DISPUTE_TARGETS:
++        raise HTTPException(status_code=400, detail=f"target_type must be one of {sorted(DISPUTE_TARGETS)}")
++    if target == "PERFORMANCE_RECORD":
++        row = db.query(models.PerformanceRecord).filter(models.PerformanceRecord.id == payload.target_id).first()
++        owned = row and role == "buyer" and row.subject_role == "buyer" and row.subject_id == user.id
++    else:
++        row = db.query(models.TransportRequest).filter(models.TransportRequest.id == payload.target_id).first()
++        owned = row and role == "transporter" and row.transporter_id == user.id
++    if not owned:
++        raise HTTPException(status_code=404, detail="Evidence item not found")
++    if db.query(models.ReputationDispute).filter(
++            models.ReputationDispute.target_type == target,
++            models.ReputationDispute.target_id == payload.target_id,
++            models.ReputationDispute.subject_role == role,
++            models.ReputationDispute.subject_id == user.id).first():
++        raise HTTPException(status_code=409, detail="You have already contested this item")
++    d = models.ReputationDispute(
++        subject_role=role, subject_id=user.id, target_type=target, target_id=payload.target_id,
++        reason=payload.reason, evidence_urls=payload.evidence_urls, status="OPEN")
++    db.add(d)
++    db.commit()
++    db.refresh(d)
++    return _dispute_dict(d)
++
++
++@router.get("/disputes/mine")
++def my_disputes(current=Depends(get_current_user), db: Session = Depends(get_db)):
++    role, user = current["role"], current["user"]
++    if role not in ("buyer", "transporter"):
++        return []
++    rows = (db.query(models.ReputationDispute)
++            .filter(models.ReputationDispute.subject_role == role,
++                    models.ReputationDispute.subject_id == user.id)
++            .order_by(models.ReputationDispute.id.desc()).all())
++    return [_dispute_dict(d) for d in rows]
++
++
++@router.get("/admin/disputes")
++def admin_list_disputes(status: Optional[str] = None, admin=Depends(require_admin),
++                        db: Session = Depends(get_db)):
++    q = db.query(models.ReputationDispute)
++    if status:
++        q = q.filter(models.ReputationDispute.status == status.upper())
++    return [_dispute_dict(d) for d in q.order_by(models.ReputationDispute.id.desc()).limit(100).all()]
++
++
++@router.patch("/admin/disputes/{dispute_id}")
++def admin_decide_dispute(dispute_id: int, payload: DisputeDecisionIn, admin=Depends(require_admin),
++                         db: Session = Depends(get_db)):
++    d = db.query(models.ReputationDispute).filter(models.ReputationDispute.id == dispute_id).first()
++    if not d:
++        raise HTTPException(status_code=404, detail="Dispute not found")
++    new = payload.status.upper()
++    if new not in ADMIN_DISPUTE_STATUSES:
++        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(ADMIN_DISPUTE_STATUSES)}")
++    if d.status in ("UPHELD", "REJECTED"):
++        raise HTTPException(status_code=409, detail="This dispute is already decided")
++    if new in ("UPHELD", "REJECTED"):
++        if not (payload.admin_note or "").strip():
++            raise HTTPException(status_code=400, detail="A written reason is required to decide a dispute")
++        d.resolved_at = dt.datetime.utcnow()
++    d.status = new
++    if payload.admin_note:
++        d.admin_note = payload.admin_note
++    db.commit()
++    db.refresh(d)
++    return _dispute_dict(d)
+diff --git a/backend/app/routers/transport.py b/backend/app/routers/transport.py
+index 74ef1be..cf7ee85 100644
+--- a/backend/app/routers/transport.py
++++ b/backend/app/routers/transport.py
+@@ -325,6 +325,8 @@ def cancel_request(
+     if r.status in ("DELIVERED", "CANCELLED"):
+         raise AppError(status_code=400, code="TRANSPORT_REQUEST_NOT_CANCELLABLE", detail=f"Cannot cancel a request in status {r.status}")
+     r.status = "CANCELLED"
++    r.cancelled_by = "farmer"
++    r.cancelled_at = dt.datetime.utcnow()
+     db.commit()
+     return {"cancelled": True}
+ 
+diff --git a/backend/app/routers/transport_negotiation.py b/backend/app/routers/transport_negotiation.py
+index 6c96150..b2e50f7 100644
+--- a/backend/app/routers/transport_negotiation.py
++++ b/backend/app/routers/transport_negotiation.py
+@@ -311,6 +311,9 @@ def transporter_update_status(
+         r.delivered_at = now
+     elif new_status == "COMPLETED":
+         r.completed_at = now
++    elif new_status == "CANCELLED":
++        r.cancelled_by = "transporter"
++        r.cancelled_at = now
+     r.updated_at = now
+ 
+     if r.lot_id and new_status in ("PICKED_UP", "IN_TRANSIT", "DELIVERED"):
+diff --git a/backend/app/services/reputation.py b/backend/app/services/reputation.py
+new file mode 100644
+index 0000000..2ed0a09
+--- /dev/null
++++ b/backend/app/services/reputation.py
+@@ -0,0 +1,433 @@
++"""
++Partner reputation / service quality (QoS).
++
++Design rules -- these are the whole point of the module:
++
++* Every figure is computed from rows that already exist in the database.
++  Nothing is defaulted, seeded, smoothed or estimated. (The legacy
++  ``Buyer.reliability_score`` / ``payment_history_score`` columns are seeded
++  defaults, NOT evidence, and are deliberately never read here.)
++* Each indicator reports ``numerator`` / ``denominator`` so the farmer can see
++  the sample behind it, plus the time of the latest event ("recency").
++* An indicator with no usable evidence has ``status = "not_recorded"`` and
++  ``value = None`` -- it is never shown as 0 % and never penalises anyone.
++* A partner with fewer than ``MIN_COMPLETED_FOR_PROFILE`` completed outcomes is
++  labelled "Insufficient history" instead of being scored.
++* Evidence that the partner has contested (open / under review / upheld
++  dispute) is excluded from their rates and counted separately.
++* Ranking uses the Wilson lower confidence bound, so a 5/5 record ranks below
++  a 95/100 record. There is no composite 0-100 "score".
++
++The policy constants below are tunable parameters, not measured results.
++"""
++from __future__ import annotations
++
++import datetime as dt
++import math
++from typing import Dict, Iterable, List, Optional, Set, Tuple
++
++from sqlalchemy.orm import Session
++
++from app import models
++
++# ── tunable policy parameters ────────────────────────────────────────────────
++MIN_COMPLETED_FOR_PROFILE = 3            # below this -> "Insufficient history"
++PICKUP_GRACE = dt.timedelta(hours=2)     # pickup within grace of schedule = on time
++QUOTE_TOLERANCE_PCT = 5.0                # final charge <= agreed * (1 + 5 %) = accurate
++RECENT_WINDOW_DAYS = 90
++IST_OFFSET = dt.timedelta(hours=5, minutes=30)   # pickup_date/time are entered in IST
++
++LABEL_INSUFFICIENT = "Insufficient history"
++LABEL_ESTABLISHED = "Evidence-based profile"
++
++COMPLETED_TRANSPORT = ("DELIVERED", "COMPLETED")
++CONTESTING = ("OPEN", "UNDER_REVIEW", "UPHELD")     # dispute states that exclude evidence
++
++BUYER_METRICS = {
++    "BUYER_PICKUP": {"ON_TIME", "LATE", "NO_SHOW"},
++    "BUYER_TERMS": {"AS_AGREED", "DEVIATED"},
++}
++GOOD_RESULTS = {"ON_TIME", "AS_AGREED"}
++
++
++# ── small pure helpers (unit-tested without a database) ──────────────────────
++def wilson_lower_bound(successes: int, total: int, z: float = 1.96) -> Optional[float]:
++    """95 % lower confidence bound of a proportion. None when total == 0."""
++    if total <= 0:
++        return None
++    p = successes / total
++    denom = 1 + z * z / total
++    centre = p + z * z / (2 * total)
++    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
++    return round((centre - margin) / denom, 4)
++
++
++def indicator(key: str, label: str, numerator: int, denominator: int, *,
++              last_event_at: Optional[dt.datetime] = None,
++              detail: Optional[str] = None,
++              excluded_under_review: int = 0,
++              unavailable_reason: Optional[str] = None) -> Dict:
++    """One reputation indicator. ``value`` is a 0-1 proportion or None."""
++    measured = denominator > 0
++    return {
++        "key": key,
++        "label": label,
++        "status": "measured" if measured else "not_recorded",
++        "value": round(numerator / denominator, 4) if measured else None,
++        "numerator": numerator if measured else None,
++        "denominator": denominator if measured else 0,
++        "last_event_at": last_event_at.isoformat() if (measured and last_event_at) else None,
++        "excluded_under_review": excluded_under_review,
++        "detail": detail if measured else (unavailable_reason or "No recorded evidence yet"),
++    }
++
++
++def scheduled_pickup_utc(pickup_date: Optional[str], pickup_time: Optional[str]) -> Optional[dt.datetime]:
++    """Scheduled pickup as naive UTC. Date/time are entered in IST. With no
++    time of day the pickup is due by the END of that date."""
++    if not pickup_date:
++        return None
++    try:
++        d = dt.date.fromisoformat(pickup_date.strip()[:10])
++    except ValueError:
++        return None
++    t = None
++    if pickup_time:
++        for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
++            try:
++                t = dt.datetime.strptime(pickup_time.strip().upper(), fmt).time()
++                break
++            except ValueError:
++                continue
++    local = dt.datetime.combine(d, t) if t else dt.datetime.combine(d, dt.time(23, 59, 59))
++    return local - IST_OFFSET
++
++
++def pickup_on_time(scheduled_utc: Optional[dt.datetime], actual_utc: Optional[dt.datetime]) -> Optional[bool]:
++    if scheduled_utc is None or actual_utc is None:
++        return None
++    return actual_utc <= scheduled_utc + PICKUP_GRACE
++
++
++def quote_deviation_pct(agreed: Optional[float], final: Optional[float]) -> Optional[float]:
++    if agreed is None or final is None or agreed <= 0:
++        return None
++    return round((final - agreed) / agreed * 100.0, 2)
++
++
++def quote_accurate(dev_pct: Optional[float]) -> Optional[bool]:
++    """Only overcharging counts against accuracy; charging less is fine."""
++    if dev_pct is None:
++        return None
++    return dev_pct <= QUOTE_TOLERANCE_PCT
++
++
++def _latest(values: Iterable[Optional[dt.datetime]]) -> Optional[dt.datetime]:
++    vals = [v for v in values if v]
++    return max(vals) if vals else None
++
++
++def _normalize_txn_status(raw: Optional[str]) -> str:
++    return "COMPLETED" if raw and raw.lower() == "completed" else (raw or "")
++
++
++# ── evidence-exclusion lookup ────────────────────────────────────────────────
++def _contested(db: Session, subject_role: str, subject_id: int) -> Dict[Tuple[str, int], str]:
++    rows = (db.query(models.ReputationDispute)
++            .filter(models.ReputationDispute.subject_role == subject_role,
++                    models.ReputationDispute.subject_id == subject_id,
++                    models.ReputationDispute.status.in_(CONTESTING)).all())
++    return {(r.target_type, r.target_id): r.status for r in rows}
++
++
++def _complaint_summary(db: Session, subject_role: str, subject_id: int) -> Dict:
++    """Complaints are shown as counts by status. They are NOT turned into a
++    penalty rate: an OPEN complaint is an allegation, not a finding, and the
++    Grievance table records no 'upheld' outcome."""
++    rows = (db.query(models.Grievance)
++            .filter(models.Grievance.against_user == subject_role,
++                    models.Grievance.against_user_id == subject_id).all())
++    pending = [g for g in rows if g.status in ("OPEN", "UNDER_REVIEW", "WAITING_FOR_EVIDENCE")]
++    resolved = [g for g in rows if g.status in ("RESOLVED", "CLOSED")]
++    dismissed = [g for g in rows if g.status == "REJECTED"]
++    return {
++        "recorded": len(rows),
++        "pending_review": len(pending),
++        "resolved": len(resolved),
++        "dismissed": len(dismissed),
++        "last_event_at": (_latest(g.created_at for g in rows).isoformat() if rows else None),
++        "note": "Complaints are allegations until reviewed; pending ones are shown but not counted against the partner.",
++    }
++
++
++def _recency(events: List[Optional[dt.datetime]], now: dt.datetime) -> Dict:
++    last = _latest(events)
++    cutoff = now - dt.timedelta(days=RECENT_WINDOW_DAYS)
++    return {
++        "last_activity_at": last.isoformat() if last else None,
++        "events_last_%d_days" % RECENT_WINDOW_DAYS: sum(1 for e in events if e and e >= cutoff),
++    }
++
++
++def _label(completed: int) -> Dict:
++    ok = completed >= MIN_COMPLETED_FOR_PROFILE
++    return {
++        "label": LABEL_ESTABLISHED if ok else LABEL_INSUFFICIENT,
++        "sufficient_history": ok,
++        "completed_outcomes": completed,
++        "minimum_required": MIN_COMPLETED_FOR_PROFILE,
++    }
++
++
++# ── transport agency profile ─────────────────────────────────────────────────
++def transporter_profile(db: Session, transporter_id: int, now: Optional[dt.datetime] = None) -> Optional[Dict]:
++    now = now or dt.datetime.utcnow()
++    t = db.query(models.Transporter).filter(models.Transporter.id == transporter_id).first()
++    if not t:
++        return None
++    contested = _contested(db, "transporter", transporter_id)
++    reqs = (db.query(models.TransportRequest)
++            .filter(models.TransportRequest.transporter_id == transporter_id).all())
++
++    def under_review(r):  # contested wholesale -> excluded from every transport rate
++        return ("TRANSPORT_REQUEST", r.id) in contested
++
++    live = [r for r in reqs if not under_review(r)]
++    n_excluded = len(reqs) - len(live)
++
++    completed = [r for r in live if r.status in COMPLETED_TRANSPORT]
++    cancelled_by_agency = [r for r in live if r.status == "CANCELLED" and r.cancelled_by == "transporter"]
++    cancelled_other = [r for r in live if r.status == "CANCELLED" and r.cancelled_by != "transporter"]
++
++    # on-time pickup
++    pu_ok = pu_n = 0
++    pu_last = []
++    for r in live:
++        verdict = pickup_on_time(scheduled_pickup_utc(r.pickup_date, r.pickup_time), r.picked_up_at)
++        if verdict is None:
++            continue
++        pu_n += 1
++        pu_ok += 1 if verdict else 0
++        pu_last.append(r.picked_up_at)
++
++    # on-time delivery (only where a delivery promise was recorded)
++    dl_ok = dl_n = 0
++    dl_last = []
++    for r in completed:
++        if not (r.promised_delivery_by and r.delivered_at):
++            continue
++        try:
++            deadline = dt.datetime.combine(dt.date.fromisoformat(r.promised_delivery_by[:10]),
++                                           dt.time(23, 59, 59)) - IST_OFFSET
++        except ValueError:
++            continue
++        dl_n += 1
++        dl_ok += 1 if r.delivered_at <= deadline else 0
++        dl_last.append(r.delivered_at)
++
++    # quote accuracy: agreed price vs the charge actually billed
++    qa_ok = qa_n = 0
++    devs: List[float] = []
++    qa_last = []
++    for r in live:
++        agreed = r.transporter_agreed_price if r.transporter_agreed_price is not None else r.agreed_price
++        dev = quote_deviation_pct(agreed, r.final_charge)
++        if dev is None:
++            continue
++        qa_n += 1
++        qa_ok += 1 if quote_accurate(dev) else 0
++        devs.append(dev)
++        qa_last.append(r.final_charge_recorded_at)
++    qa_detail = (f"Average deviation from agreed price {round(sum(devs) / len(devs), 2)} % "
++                 f"(accurate = billed within +{QUOTE_TOLERANCE_PCT:g} % of agreed)") if devs else None
++
++    # fulfilment: trips that were completed vs cancelled BY the agency
++    f_den = len(completed) + len(cancelled_by_agency)
++
++    indicators = [
++        indicator("on_time_pickup", "On-time pickup", pu_ok, pu_n, last_event_at=_latest(pu_last),
++                  detail=f"Picked up within {int(PICKUP_GRACE.total_seconds() // 3600)} h of the scheduled time",
++                  unavailable_reason="No trip has both a scheduled and a recorded pickup time"),
++        indicator("on_time_delivery", "On-time delivery", dl_ok, dl_n, last_event_at=_latest(dl_last),
++                  detail="Delivered by the promised delivery date",
++                  unavailable_reason="No trip has a recorded delivery promise"),
++        indicator("quote_accuracy", "Quote accuracy", qa_ok, qa_n, last_event_at=_latest(qa_last),
++                  detail=qa_detail,
++                  unavailable_reason="No trip has both an agreed price and a recorded final charge"),
++        indicator("trip_fulfilment", "Completed vs agency-cancelled trips", len(completed), f_den,
++                  last_event_at=_latest([r.completed_at or r.delivered_at for r in completed]
++                                        + [r.cancelled_at for r in cancelled_by_agency]),
++                  detail=f"{len(completed)} completed, {len(cancelled_by_agency)} cancelled by the agency"),
++    ]
++
++    review_rows = (db.query(models.TransportReview)
++                   .filter(models.TransportReview.reviewee_role == "transporter",
++                           models.TransportReview.reviewee_id == transporter_id).all())
++    events = ([r.delivered_at or r.completed_at for r in completed]
++              + [r.cancelled_at for r in cancelled_by_agency])
++
++    return {
++        "partner_type": "transporter",
++        "partner_id": transporter_id,
++        "name": t.business_name or t.name,
++        **_label(len(completed)),
++        "trip_history": {
++            "completed": len(completed),
++            "cancelled_by_agency": len(cancelled_by_agency),
++            "cancelled_other_or_unrecorded": len(cancelled_other),
++            "contested_items_under_review": n_excluded,
++        },
++        "indicators": indicators,
++        "complaints_and_disputes": _complaint_summary(db, "transporter", transporter_id),
++        "recency": _recency(events, now),
++        "farmer_feedback": {
++            "count": len(review_rows),
++            "average_overall": (round(sum(r.rating for r in review_rows) / len(review_rows), 2)
++                                if review_rows else None),
++            "note": "Opinion-based feedback, shown separately and not used in ranking.",
++        },
++        "ranking": _ranking(len(completed) >= MIN_COMPLETED_FOR_PROFILE,
++                            [(pu_ok, pu_n), (qa_ok, qa_n), (len(completed), f_den)]),
++    }
++
++
++# ── buyer profile ────────────────────────────────────────────────────────────
++def buyer_profile(db: Session, buyer_id: int, now: Optional[dt.datetime] = None) -> Optional[Dict]:
++    now = now or dt.datetime.utcnow()
++    b = db.query(models.Buyer).filter(models.Buyer.id == buyer_id).first()
++    if not b:
++        return None
++    contested = _contested(db, "buyer", buyer_id)
++    txns = db.query(models.Transaction).filter(models.Transaction.buyer_id == buyer_id).all()
++    status_of = {t.id: _normalize_txn_status(t.status) for t in txns}
++    completed = [t for t in txns if status_of[t.id] == "COMPLETED"]
++    cancelled = [t for t in txns if status_of[t.id] == "CANCELLED"]
++    in_progress = len(txns) - len(completed) - len(cancelled)
++
++    recs = (db.query(models.PerformanceRecord)
++            .filter(models.PerformanceRecord.subject_role == "buyer",
++                    models.PerformanceRecord.subject_id == buyer_id).all())
++
++    def metric_indicator(key, label, metric, detail):
++        rows = [r for r in recs if r.metric == metric]
++        live = [r for r in rows if ("PERFORMANCE_RECORD", r.id) not in contested]
++        ok = sum(1 for r in live if r.result in GOOD_RESULTS)
++        ind = indicator(key, label, ok, len(live), last_event_at=_latest(r.created_at for r in live),
++                        detail=detail, excluded_under_review=len(rows) - len(live),
++                        unavailable_reason="No outcome recorded by a farmer yet")
++        return ind, ok, len(live)
++
++    pickup_ind, pk_ok, pk_n = metric_indicator(
++        "pickup_reliability", "Pickup reliability", "BUYER_PICKUP",
++        "Pickups recorded by farmers as on time (vs late / no-show)")
++    terms_ind, tm_ok, tm_n = metric_indicator(
++        "terms_adherence", "Adherence to agreed terms", "BUYER_TERMS",
++        "Transactions recorded by farmers as fulfilled on the agreed price/quantity/quality")
++
++    # payment status: simulated payments are not evidence
++    pays = db.query(models.Payment).filter(models.Payment.buyer_id == buyer_id).all()
++    real = [p for p in pays if not p.is_demo]
++    demo_n = len(pays) - len(real)
++    settled = [p for p in real if p.payment_status in ("PAID", "FAILED", "DISPUTED")
++               or (p.payment_status in ("PENDING", "DUE", "INITIATED") and _overdue(p, now))]
++    paid_on_time = [p for p in settled if p.payment_status == "PAID" and not _paid_late(p)]
++    pay_ind = indicator(
++        "payment_status", "Payment status", len(paid_on_time), len(settled),
++        last_event_at=_latest(p.received_at or p.updated_at for p in settled),
++        detail="Real payments received on or before the due date (due date required)",
++        unavailable_reason=("Payments in this deployment are simulated and excluded from reputation"
++                            if demo_n and not real else "No settled, non-simulated payments recorded"))
++    pay_ind["simulated_payments_excluded"] = demo_n
++
++    events = [t.updated_at or t.created_at for t in completed + cancelled]
++    return {
++        "partner_type": "buyer",
++        "partner_id": buyer_id,
++        "name": b.company_name,
++        "verification_status": b.verification_status,
++        **_label(len(completed)),
++        "transaction_history": {
++            "completed": len(completed),
++            "cancelled": len(cancelled),
++            "in_progress": in_progress,
++            "cancellation_note": "Cancellation cause is not recorded for transactions, so it is shown as a count, not a rate.",
++        },
++        "indicators": [terms_ind, pickup_ind, pay_ind],
++        "complaints_and_disputes": _complaint_summary(db, "buyer", buyer_id),
++        "recency": _recency(events, now),
++        "ranking": _ranking(len(completed) >= MIN_COMPLETED_FOR_PROFILE,
++                            [(tm_ok, tm_n), (pk_ok, pk_n)]),
++    }
++
++
++def _overdue(p, now: dt.datetime) -> bool:
++    try:
++        return bool(p.payment_due_date) and dt.date.fromisoformat(p.payment_due_date[:10]) < now.date()
++    except ValueError:
++        return False
++
++
++def _paid_late(p) -> bool:
++    try:
++        return bool(p.payment_due_date and p.received_at
++                    and p.received_at.date() > dt.date.fromisoformat(p.payment_due_date[:10]))
++    except ValueError:
++        return False
++
++
++def _ranking(sufficient: bool, pairs: List[Tuple[int, int]]) -> Dict:
++    """Pool every measured success/total pair and rank by the Wilson lower
++    bound. Not a score shown to users -- only the sort key for ordering."""
++    s = sum(a for a, n in pairs if n > 0)
++    n = sum(n for _, n in pairs if n > 0)
++    return {
++        "eligible": bool(sufficient and n > 0),
++        "evidence_points": n,
++        "wilson_lower_bound": wilson_lower_bound(s, n) if (sufficient and n > 0) else None,
++        "method": "95% Wilson lower bound over all measured indicators; "
++                  "partners with insufficient history are listed after established ones, unranked.",
++    }
++
++
++def rank_profiles(profiles: List[Dict]) -> List[Dict]:
++    """Established partners first (by lower bound, then evidence volume);
++    insufficient-history partners after, ordered by volume only."""
++    def key(p):
++        r = p["ranking"]
++        return (0 if r["eligible"] else 1,
++                -(r["wilson_lower_bound"] or 0.0),
++                -p["completed_outcomes"],
++                p["partner_id"])
++    ranked = sorted(profiles, key=key)
++    pos = 0
++    for p in ranked:
++        if p["ranking"]["eligible"]:
++            pos += 1
++            p["ranking"]["position"] = pos
++        else:
++            p["ranking"]["position"] = None
++    return ranked
++
++
++def methodology() -> Dict:
++    return {
++        "principles": [
++            "Every figure is computed from recorded transactions, trips and complaints; nothing is estimated or pre-filled.",
++            "Each indicator shows its sample size and latest event date.",
++            "Partners with too little history are labelled 'Insufficient history', never scored low.",
++            "Evidence a partner has contested is left out of their rates while it is reviewed.",
++            "Simulated (demo) payments are never counted.",
++            "No composite score is shown; ranking uses a statistical lower bound so small samples cannot top the list.",
++        ],
++        "parameters": {
++            "minimum_completed_outcomes": MIN_COMPLETED_FOR_PROFILE,
++            "pickup_grace_hours": PICKUP_GRACE.total_seconds() / 3600,
++            "quote_tolerance_percent": QUOTE_TOLERANCE_PCT,
++            "recent_window_days": RECENT_WINDOW_DAYS,
++        },
++        "limitations": [
++            "Buyer pickup and terms outcomes exist only where a farmer has recorded them.",
++            "Final transport charge exists only where the farmer has recorded it.",
++            "Reputation reflects CropWise activity only and is not a guarantee of future performance.",
++        ],
++    }
+diff --git a/backend/tests/test_reputation.py b/backend/tests/test_reputation.py
+new file mode 100644
+index 0000000..804c202
+--- /dev/null
++++ b/backend/tests/test_reputation.py
+@@ -0,0 +1,225 @@
++"""
++Tests for partner reputation / QoS (buyers + transport agencies).
++
++Covers the honesty rules: no invented values, "Insufficient history" for new
++partners, small samples cannot outrank large ones, simulated payments are
++excluded, and contested evidence is left out of the rates.
++
++Run: pytest backend/tests/test_reputation.py -v
++"""
++import datetime as dt
++
++import pytest
++from sqlalchemy import create_engine
++from sqlalchemy.orm import sessionmaker
++
++from app import models
++from app.database import Base
++from app.services import reputation as rep
++
++NOW = dt.datetime(2026, 10, 15, 12, 0, 0)
++
++
++@pytest.fixture()
++def db():
++    engine = create_engine("sqlite:///:memory:")
++    Base.metadata.create_all(bind=engine)
++    s = sessionmaker(bind=engine)()
++    yield s
++    s.close()
++
++
++def _farmer(db, n=1):
++    f = models.Farmer(name=f"F{n}", email=f"f{n}@x.in", password_hash="x", location="Bilaspur")
++    db.add(f); db.flush(); return f
++
++
++def _buyer(db, n=1, **kw):
++    b = models.Buyer(company_name=f"B{n}", email=f"b{n}@x.in", password_hash="x", location="Raipur", **kw)
++    db.add(b); db.flush(); return b
++
++
++def _transporter(db, n=1):
++    t = models.Transporter(name=f"T{n}", email=f"t{n}@x.in", password_hash="x")
++    db.add(t); db.flush(); return t
++
++
++def _trip(db, farmer, t, **kw):
++    r = models.TransportRequest(farmer_id=farmer.id, transporter_id=t.id,
++                                pickup_location="A", destination="B", **kw)
++    db.add(r); db.flush(); return r
++
++
++# ── pure helpers ─────────────────────────────────────────────────────────────
++def test_wilson_small_perfect_sample_ranks_below_large_good_sample():
++    assert rep.wilson_lower_bound(5, 5) < rep.wilson_lower_bound(95, 100)
++    assert rep.wilson_lower_bound(0, 0) is None
++
++
++def test_indicator_without_evidence_is_not_recorded_not_zero():
++    ind = rep.indicator("x", "X", 0, 0)
++    assert ind["status"] == "not_recorded" and ind["value"] is None and ind["denominator"] == 0
++
++
++def test_pickup_schedule_uses_ist_and_grace():
++    sched = rep.scheduled_pickup_utc("2026-10-10", "10:00")      # 10:00 IST = 04:30 UTC
++    assert sched == dt.datetime(2026, 10, 10, 4, 30)
++    assert rep.pickup_on_time(sched, dt.datetime(2026, 10, 10, 6, 0)) is True
++    assert rep.pickup_on_time(sched, dt.datetime(2026, 10, 10, 7, 0)) is False
++    assert rep.pickup_on_time(None, dt.datetime(2026, 10, 10, 6, 0)) is None
++    assert rep.scheduled_pickup_utc("not-a-date", None) is None
++
++
++def test_quote_accuracy_only_penalises_overcharge():
++    assert rep.quote_deviation_pct(1000, 1040) == 4.0 and rep.quote_accurate(4.0) is True
++    assert rep.quote_accurate(rep.quote_deviation_pct(1000, 1200)) is False
++    assert rep.quote_accurate(rep.quote_deviation_pct(1000, 900)) is True
++    assert rep.quote_deviation_pct(None, 900) is None and rep.quote_deviation_pct(0, 900) is None
++
++
++# ── transporter profile ──────────────────────────────────────────────────────
++def test_new_transporter_is_insufficient_history_with_no_invented_numbers(db):
++    t = _transporter(db); db.commit()
++    p = rep.transporter_profile(db, t.id, NOW)
++    assert p["label"] == rep.LABEL_INSUFFICIENT and p["sufficient_history"] is False
++    assert all(i["status"] == "not_recorded" and i["value"] is None for i in p["indicators"])
++    assert p["ranking"]["eligible"] is False and p["ranking"]["wilson_lower_bound"] is None
++    assert p["farmer_feedback"]["average_overall"] is None
++
++
++def test_transporter_rates_come_from_recorded_rows(db):
++    f, t = _farmer(db), _transporter(db)
++    for i in range(4):   # four delivered trips, 3 on time, 1 late
++        late = (i == 3)
++        _trip(db, f, t, status="DELIVERED", pickup_date="2026-10-01", pickup_time="10:00",
++              picked_up_at=dt.datetime(2026, 10, 1, 9, 0) if late else dt.datetime(2026, 10, 1, 4, 30),
++              delivered_at=dt.datetime(2026, 10, 2), transporter_agreed_price=1000,
++              final_charge=1000 if i < 3 else 1300, final_charge_recorded_at=dt.datetime(2026, 10, 3))
++    _trip(db, f, t, status="CANCELLED", cancelled_by="transporter", cancelled_at=dt.datetime(2026, 10, 5))
++    _trip(db, f, t, status="CANCELLED", cancelled_by="farmer")
++    _trip(db, f, t, status="CANCELLED")                      # legacy: cause not recorded
++    db.commit()
++    p = rep.transporter_profile(db, t.id, NOW)
++    ind = {i["key"]: i for i in p["indicators"]}
++    assert p["label"] == rep.LABEL_ESTABLISHED
++    assert (ind["on_time_pickup"]["numerator"], ind["on_time_pickup"]["denominator"]) == (3, 4)
++    assert (ind["quote_accuracy"]["numerator"], ind["quote_accuracy"]["denominator"]) == (3, 4)
++    assert (ind["trip_fulfilment"]["numerator"], ind["trip_fulfilment"]["denominator"]) == (4, 5)
++    assert ind["on_time_delivery"]["status"] == "not_recorded"        # no delivery promise recorded
++    assert p["trip_history"]["cancelled_by_agency"] == 1
++    assert p["trip_history"]["cancelled_other_or_unrecorded"] == 2     # not counted against the agency
++
++
++def test_delivery_promise_is_used_only_when_recorded(db):
++    f, t = _farmer(db), _transporter(db)
++    _trip(db, f, t, status="DELIVERED", delivered_at=dt.datetime(2026, 10, 2, 6, 0), promised_delivery_by="2026-10-02")
++    _trip(db, f, t, status="DELIVERED", delivered_at=dt.datetime(2026, 10, 4, 6, 0), promised_delivery_by="2026-10-02")
++    _trip(db, f, t, status="DELIVERED", delivered_at=dt.datetime(2026, 10, 4, 6, 0))        # no promise
++    db.commit()
++    ind = {i["key"]: i for i in rep.transporter_profile(db, t.id, NOW)["indicators"]}
++    assert (ind["on_time_delivery"]["numerator"], ind["on_time_delivery"]["denominator"]) == (1, 2)
++
++
++def test_contested_trip_is_excluded_from_rates_while_open_and_after_upheld_but_not_when_rejected(db):
++    f, t = _farmer(db), _transporter(db)
++    trips = [_trip(db, f, t, status="DELIVERED", transporter_agreed_price=1000,
++                   final_charge=1000 if i < 3 else 2000, final_charge_recorded_at=NOW) for i in range(4)]
++    d = models.ReputationDispute(subject_role="transporter", subject_id=t.id, target_type="TRANSPORT_REQUEST",
++                                 target_id=trips[3].id, reason="Charge included a toll agreed verbally", status="OPEN")
++    db.add(d); db.commit()
++    q = lambda: {i["key"]: i for i in rep.transporter_profile(db, t.id, NOW)["indicators"]}["quote_accuracy"]
++    assert (q()["numerator"], q()["denominator"]) == (3, 3)
++    assert rep.transporter_profile(db, t.id, NOW)["trip_history"]["contested_items_under_review"] == 1
++    d.status = "UPHELD"; db.commit()
++    assert q()["denominator"] == 3
++    d.status = "REJECTED"; db.commit()
++    assert (q()["numerator"], q()["denominator"]) == (3, 4)
++
++
++def test_open_complaints_are_counted_but_not_treated_as_findings(db):
++    t, f = _transporter(db), _farmer(db)
++    db.add(models.Grievance(raised_by="farmer", raised_by_id=f.id, against_user="transporter",
++                            against_user_id=t.id, category="DELIVERY", description="Late", status="OPEN"))
++    db.commit()
++    c = rep.transporter_profile(db, t.id, NOW)["complaints_and_disputes"]
++    assert c["recorded"] == 1 and c["pending_review"] == 1 and c["dismissed"] == 0
++
++
++# ── buyer profile ────────────────────────────────────────────────────────────
++def test_buyer_seeded_reliability_columns_are_never_used(db):
++    b = _buyer(db, reliability_score=99.0, payment_history_score=99.0); db.commit()
++    p = rep.buyer_profile(db, b.id, NOW)
++    assert p["label"] == rep.LABEL_INSUFFICIENT
++    assert all(i["value"] is None for i in p["indicators"])
++    assert "99" not in str(p)
++
++
++def _txn(db, f, b, status="COMPLETED"):
++    t = models.Transaction(farmer_id=f.id, buyer_id=b.id, final_price_per_kg=20, quantity_kg=100,
++                           total_amount=2000, status=status, updated_at=NOW)
++    db.add(t); db.flush(); return t
++
++
++def test_buyer_indicators_from_farmer_recorded_outcomes(db):
++    f, b = _farmer(db), _buyer(db)
++    txns = [_txn(db, f, b) for _ in range(4)] + [_txn(db, f, b, "IN_TRANSIT"), _txn(db, f, b, "CANCELLED")]
++    for i, t in enumerate(txns[:4]):
++        db.add(models.PerformanceRecord(subject_role="buyer", subject_id=b.id, transaction_id=t.id,
++                                        metric="BUYER_PICKUP", result="ON_TIME" if i < 3 else "NO_SHOW",
++                                        recorded_by_role="farmer", recorded_by_id=f.id, created_at=NOW))
++    db.commit()
++    p = rep.buyer_profile(db, b.id, NOW)
++    ind = {i["key"]: i for i in p["indicators"]}
++    assert p["transaction_history"] == {**p["transaction_history"], "completed": 4, "cancelled": 1, "in_progress": 1}
++    assert (ind["pickup_reliability"]["numerator"], ind["pickup_reliability"]["denominator"]) == (3, 4)
++    assert ind["terms_adherence"]["status"] == "not_recorded"
++    assert p["label"] == rep.LABEL_ESTABLISHED
++
++
++def test_simulated_payments_are_excluded_from_payment_indicator(db):
++    f, b = _farmer(db), _buyer(db)
++    t = _txn(db, f, b)
++    db.add(models.Payment(transaction_id=t.id, buyer_id=b.id, farmer_id=f.id, amount=2000,
++                          payment_status="PAID", is_demo=True, received_at=NOW)); db.commit()
++    pay = {i["key"]: i for i in rep.buyer_profile(db, b.id, NOW)["indicators"]}["payment_status"]
++    assert pay["status"] == "not_recorded" and pay["simulated_payments_excluded"] == 1
++    assert "simulated" in pay["detail"].lower()
++
++
++def test_real_payments_paid_on_time_vs_late(db):
++    f, b = _farmer(db), _buyer(db)
++    for due, got in [("2026-10-05", dt.datetime(2026, 10, 4)), ("2026-10-05", dt.datetime(2026, 10, 9))]:
++        t = _txn(db, f, b)
++        db.add(models.Payment(transaction_id=t.id, buyer_id=b.id, farmer_id=f.id, amount=2000, payment_status="PAID",
++                              is_demo=False, payment_due_date=due, received_at=got))
++    db.commit()
++    pay = {i["key"]: i for i in rep.buyer_profile(db, b.id, NOW)["indicators"]}["payment_status"]
++    assert (pay["numerator"], pay["denominator"]) == (1, 2)
++
++
++# ── ranking ──────────────────────────────────────────────────────────────────
++def test_ranking_puts_established_first_and_leaves_new_partners_unranked(db):
++    f = _farmer(db)
++    big, small, new = _transporter(db, 1), _transporter(db, 2), _transporter(db, 3)
++    for _ in range(100):
++        _trip(db, f, big, status="DELIVERED")
++    for _ in range(4):
++        _trip(db, f, small, status="DELIVERED")
++    db.commit()
++    ranked = rep.rank_profiles([rep.transporter_profile(db, x.id, NOW) for x in (new, small, big)])
++    assert [p["partner_id"] for p in ranked] == [big.id, small.id, new.id]
++    assert [p["ranking"]["position"] for p in ranked] == [1, 2, None]
++
++
++# ── API smoke: routes registered, auth enforced, methodology public ──────────
++def test_routes_registered_and_protected():
++    from fastapi.testclient import TestClient
++    from app.main import app
++    c = TestClient(app)
++    paths = {r.path for r in app.routes}
++    for p in ("/reputation/methodology", "/reputation/transporters", "/reputation/buyers",
++              "/reputation/records", "/reputation/disputes", "/reputation/admin/disputes/{dispute_id}"):
++        assert p in paths
++    assert c.get("/reputation/methodology").status_code == 200
++    assert c.get("/reputation/buyers").status_code == 401            # profiles need a login
++    assert c.post("/reputation/records", json={}).status_code == 401
