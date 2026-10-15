@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Badge from '../components/Badge'
 import NegotiationPanel from '../components/NegotiationPanel'
+import ReputationBadge from '../components/ReputationBadge'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 
@@ -317,6 +318,7 @@ function OffersPanel({ listing, onChanged }) {
                     requires the backend to emit structured reason codes
                     instead of prose. Tracked as a known follow-up. */}
                 <div className="text-xs text-ink/50 dark:text-paper/50">{m.reasons.join(' · ')}</div>
+                <ReputationBadge type="buyer" id={m.buyer_id} className="mt-1" />
               </div>
             ))}
           </div>

@@ -311,6 +311,9 @@ def transporter_update_status(
         r.delivered_at = now
     elif new_status == "COMPLETED":
         r.completed_at = now
+    elif new_status == "CANCELLED":
+        r.cancelled_by = "transporter"
+        r.cancelled_at = now
     r.updated_at = now
 
     if r.lot_id and new_status in ("PICKED_UP", "IN_TRANSIT", "DELIVERED"):

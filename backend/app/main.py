@@ -15,7 +15,7 @@ from app.routers import lots, buyer_demands, buyer_verification
 from app.routers import transactions, payments, grievances, receipts
 from app.routers import storage, transport, ratings, trip_reviews
 from app.routers import weather
-from app.routers import transporters, transport_negotiation, negotiations
+from app.routers import transporters, transport_negotiation, negotiations, reputation
 
 Base.metadata.create_all(bind=engine)
 run_lightweight_migrations()
@@ -126,4 +126,5 @@ app.include_router(transporters.router)
 app.include_router(transport_negotiation.router)
 app.include_router(ratings.router)
 app.include_router(trip_reviews.router)
+app.include_router(reputation.router)
 app.include_router(weather.router)

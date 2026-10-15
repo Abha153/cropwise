@@ -7,6 +7,8 @@ import Badge from '../components/Badge'
 import { useI18n } from '../i18n/I18nContext'
 import TripReviewSection from '../components/TripReviewSection'
 import TransportQuoteSection from '../components/TransportQuoteSection'
+import ReputationBadge from '../components/ReputationBadge'
+import RecordFinalCharge from '../components/RecordFinalCharge'
 import { formatTimestamp } from '../utils/datetime'
 
 const STATUS_COLORS = {
@@ -234,6 +236,9 @@ export default function Transport() {
 
               {/* Post-trip trust layer. Renders only for DELIVERED trips;
                   the component itself returns null otherwise. */}
+              {r.transporter_id && <ReputationBadge type="transporter" id={r.transporter_id} className="mt-3" />}
+              <RecordFinalCharge trip={r} />
+
               <TripReviewSection trip={r} />
             </div>
           ))}

@@ -5,6 +5,7 @@ import StatCard from '../components/StatCard'
 import LoadingSpinner from '../components/LoadingSpinner'
 import Badge from '../components/Badge'
 import Avatar from '../components/Avatar'
+import ReputationDisputesAdmin from '../components/ReputationDisputesAdmin'
 import { useI18n } from '../i18n/I18nContext'
 
 function AdminLogin({ onSuccess }) {
@@ -269,6 +270,7 @@ export default function AdminDashboard() {
           </tbody>
         </table>
       </div>
+      <ReputationDisputesAdmin token={token} />
     </div>
   )
 }

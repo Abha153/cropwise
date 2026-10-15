@@ -6,6 +6,7 @@ import Badge from '../components/Badge'
 import NegotiationPanel from '../components/NegotiationPanel'
 import LoadingSpinner from '../components/LoadingSpinner'
 import VerificationBadge from '../components/VerificationBadge'
+import ReputationBadge from '../components/ReputationBadge'
 
 const CROPS = [
   'Tomato', 'Onion', 'Potato', 'Wheat', 'Paddy (Rice)', 'Maize',
@@ -252,6 +253,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
                   {m.location} · ₹{m.estimated_price_per_kg}/kg est.
                   {m.matched_demand_id && ` · ${t('lots.activeDemand')}`}
                 </div>
+                <ReputationBadge type="buyer" id={m.buyer_id} className="mt-1" />
                 {m.score_breakdown && (
                   <div className="grid grid-cols-4 gap-1 mt-1 text-ink/40 dark:text-paper/40">
                     {Object.entries(m.score_breakdown).slice(0, 4).map(([k, v]) => (
@@ -287,6 +289,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
                   <Badge tone={o.status === 'accepted' ? 'success' : o.status === 'rejected' ? 'neutral' : 'info'}>{t(`lots.offerStatus.${o.status}`)}</Badge>
                 </div>
                 {o.message && <div className="text-ink/50 dark:text-paper/50 mt-0.5">{o.message}</div>}
+                {o.buyer_id && <ReputationBadge type="buyer" id={o.buyer_id} className="mt-1" />}
                 <button onClick={() => setNegotiatingId(negotiatingId === o.id ? null : o.id)}
                   className="mt-2 text-forest font-semibold underline">
                   {negotiatingId === o.id ? t('negotiation.close') : t('negotiation.open')}

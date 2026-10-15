@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import RecordBuyerOutcome from '../components/RecordBuyerOutcome'
 import Badge from '../components/Badge'
 import { AgreementCard } from '../components/NegotiationPanel'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -542,6 +543,14 @@ export default function TransactionDetail() {
             <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
               <h2 className="font-display font-semibold text-base mb-4">{t('transactionDetail.receipt')}</h2>
               <ReceiptPanel txnId={txn.id} status={txn.status} />
+            </div>
+          )}
+
+          {/* Reputation evidence: what actually happened with the buyer */}
+          {role === 'farmer' && ['PICKED_UP', 'IN_TRANSIT', 'DELIVERED', 'PAYMENT_PENDING', 'PAYMENT_INITIATED', 'PAYMENT_RECEIVED', 'COMPLETED'].includes(txn.status) && (
+            <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
+              <h2 className="font-display font-semibold text-base mb-3">{t('reputation.record.title')}</h2>
+              <RecordBuyerOutcome transactionId={txn.id} />
             </div>
           )}
 

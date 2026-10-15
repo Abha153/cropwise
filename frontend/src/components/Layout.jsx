@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Home, Target, BarChart3, Package, TrendingUp, Store, ShoppingCart, Boxes,
   Briefcase, Calculator, Truck, Users, Warehouse, Handshake, Bot,
-  MessageCircle, Bell, User, ShieldCheck, LogOut, Sun, Moon,
+  MessageCircle, Bell, User, ShieldCheck, Scale, LogOut, Sun, Moon,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -26,6 +26,7 @@ function useNavGroups(role, t) {
       {
         heading: t('navAccount'),
         links: [
+          { to: '/my-reputation', label: t('navMyReputation'), Icon: Scale },
           { to: '/profile', label: t('navProfile'), Icon: User },
         ],
       },
@@ -49,6 +50,7 @@ function useNavGroups(role, t) {
           { to: '/lots', label: t('navLots'), Icon: Boxes },
           { to: '/transactions', label: t('navTransactions'), Icon: Briefcase },
           { to: '/buyer-verification', label: t('navVerification'), Icon: ShieldCheck },
+          { to: '/my-reputation', label: t('navMyReputation'), Icon: Scale },
         ],
       },
       {
@@ -83,6 +85,7 @@ function useNavGroups(role, t) {
         { to: '/buyer-demands', label: t('navBuyerDemands'), Icon: ShoppingCart },
         { to: '/lots', label: t('navLots'), Icon: Boxes },
         { to: '/transactions', label: t('navTransactions'), Icon: Briefcase },
+        { to: '/partners', label: t('navPartners'), Icon: ShieldCheck },
       ],
     },
     {
