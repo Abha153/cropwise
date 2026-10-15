@@ -130,6 +130,13 @@ def run_lightweight_migrations():
             add_column_if_missing("transport_requests", "transporter_agreed_price", "FLOAT")
             add_column_if_missing("transport_requests", "transporter_agreed_at", "DATETIME")
             add_column_if_missing("transport_requests", "completed_at", "DATETIME")
+
+            # Reputation / QoS evidence columns (nullable, never back-filled)
+            add_column_if_missing("transport_requests", "final_charge", "FLOAT")
+            add_column_if_missing("transport_requests", "final_charge_recorded_at", "DATETIME")
+            add_column_if_missing("transport_requests", "cancelled_by", "VARCHAR")
+            add_column_if_missing("transport_requests", "cancelled_at", "DATETIME")
+            add_column_if_missing("transport_requests", "promised_delivery_by", "VARCHAR")
         return
 
     # Postgres path: only the columns added after the Supabase migration.
@@ -210,5 +217,20 @@ def run_lightweight_migrations():
         ))
         conn.execute(text(
             "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS final_charge DOUBLE PRECISION"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS final_charge_recorded_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE transport_requests ADD COLUMN IF NOT EXISTS promised_delivery_by VARCHAR"
         ))
         conn.commit()

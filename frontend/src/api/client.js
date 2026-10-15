@@ -296,6 +296,19 @@ export const api = {
   myTripReviews: (transportRequestId) => request(`/trip-reviews/my/${transportRequestId}`, { auth: true }),
 
   // Ratings (Phase 14)
+  // Partner reputation / QoS (evidence-based; see backend/app/services/reputation.py)
+  reputationMethodology: () => request('/reputation/methodology'),
+  reputationTransporters: () => request('/reputation/transporters', { auth: true }),
+  reputationTransporter: (id) => request(`/reputation/transporters/${id}`, { auth: true }),
+  reputationBuyers: () => request('/reputation/buyers', { auth: true }),
+  reputationBuyer: (id) => request(`/reputation/buyers/${id}`, { auth: true }),
+  myReputationEvidence: () => request('/reputation/me/evidence', { auth: true }),
+  recordBuyerOutcome: (payload) => request('/reputation/records', { method: 'POST', body: payload, auth: true }),
+  recordFinalCharge: (requestId, finalCharge) => request(`/reputation/transport/${requestId}/final-charge`, { method: 'POST', body: { final_charge: finalCharge }, auth: true }),
+  raiseReputationDispute: (payload) => request('/reputation/disputes', { method: 'POST', body: payload, auth: true }),
+  myReputationDisputes: () => request('/reputation/disputes/mine', { auth: true }),
+  adminReputationDisputes: (adminToken, status) => request(`/reputation/admin/disputes${status ? `?status=${status}` : ''}`, { auth: true, token: adminToken }),
+  adminDecideReputationDispute: (adminToken, id, payload) => request(`/reputation/admin/disputes/${id}`, { method: 'PATCH', body: payload, auth: true, token: adminToken }),
   rateAsBuyer: (payload) => request('/ratings/buyer-rates-farmer', { method: 'POST', body: payload, auth: true }),
   rateAsFarmer: (payload) => request('/ratings/farmer-rates-buyer', { method: 'POST', body: payload, auth: true }),
   ratingsForBuyer: (buyerId) => request(`/ratings/for-buyer/${buyerId}`),

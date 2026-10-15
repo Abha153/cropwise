@@ -325,6 +325,8 @@ def cancel_request(
     if r.status in ("DELIVERED", "CANCELLED"):
         raise AppError(status_code=400, code="TRANSPORT_REQUEST_NOT_CANCELLABLE", detail=f"Cannot cancel a request in status {r.status}")
     r.status = "CANCELLED"
+    r.cancelled_by = "farmer"
+    r.cancelled_at = dt.datetime.utcnow()
     db.commit()
     return {"cancelled": True}
 
@@ -382,6 +384,7 @@ def _request_dict(r: models.TransportRequest) -> dict:
         "negotiation_status": r.negotiation_status,
         "claimed_at": r.claimed_at.isoformat() if r.claimed_at else None,
         "transporter_agreed_price": r.transporter_agreed_price,
+        "final_charge": r.final_charge,
         "transporter_agreed_at": r.transporter_agreed_at.isoformat() if r.transporter_agreed_at else None,
         "completed_at": r.completed_at.isoformat() if r.completed_at else None,
         "created_at": r.created_at.isoformat() if r.created_at else None,

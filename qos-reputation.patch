@@ -429,7 +429,7 @@ index 0000000..afc06d7
 +    db.refresh(d)
 +    return _dispute_dict(d)
 diff --git a/backend/app/routers/transport.py b/backend/app/routers/transport.py
-index 74ef1be..cf7ee85 100644
+index 74ef1be..54f6374 100644
 --- a/backend/app/routers/transport.py
 +++ b/backend/app/routers/transport.py
 @@ -325,6 +325,8 @@ def cancel_request(
@@ -441,6 +441,14 @@ index 74ef1be..cf7ee85 100644
      db.commit()
      return {"cancelled": True}
  
+@@ -382,6 +384,7 @@ def _request_dict(r: models.TransportRequest) -> dict:
+         "negotiation_status": r.negotiation_status,
+         "claimed_at": r.claimed_at.isoformat() if r.claimed_at else None,
+         "transporter_agreed_price": r.transporter_agreed_price,
++        "final_charge": r.final_charge,
+         "transporter_agreed_at": r.transporter_agreed_at.isoformat() if r.transporter_agreed_at else None,
+         "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+         "created_at": r.created_at.isoformat() if r.created_at else None,
 diff --git a/backend/app/routers/transport_negotiation.py b/backend/app/routers/transport_negotiation.py
 index 6c96150..b2e50f7 100644
 --- a/backend/app/routers/transport_negotiation.py
@@ -1125,3 +1133,1177 @@ index 0000000..804c202
 +    assert c.get("/reputation/methodology").status_code == 200
 +    assert c.get("/reputation/buyers").status_code == 401            # profiles need a login
 +    assert c.post("/reputation/records", json={}).status_code == 401
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 02ffb0c..ea1395f 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -31,6 +31,8 @@ import Transport from './pages/Transport'
+ import TransporterDashboard from './pages/TransporterDashboard'
+ import ArrivalIntelligence from './pages/ArrivalIntelligence'
+ import BestOption from './pages/BestOption'
++import Partners from './pages/Partners'
++import MyReputation from './pages/MyReputation'
+ 
+ function Protected({ children, role }) {
+   return (
+@@ -77,6 +79,9 @@ export default function App() {
+       <Route path="/arrivals" element={<Protected><ArrivalIntelligence /></Protected>} />
+       <Route path="/best-option" element={<Protected><BestOption /></Protected>} />
+ 
++      <Route path="/partners" element={<Protected role="farmer"><Partners /></Protected>} />
++      <Route path="/my-reputation" element={<Protected><MyReputation /></Protected>} />
++
+       <Route path="*" element={<Landing />} />
+     </Routes>
+   )
+diff --git a/frontend/src/api/client.js b/frontend/src/api/client.js
+index 9964e4e..96d64f0 100644
+--- a/frontend/src/api/client.js
++++ b/frontend/src/api/client.js
+@@ -296,6 +296,19 @@ export const api = {
+   myTripReviews: (transportRequestId) => request(`/trip-reviews/my/${transportRequestId}`, { auth: true }),
+ 
+   // Ratings (Phase 14)
++  // Partner reputation / QoS (evidence-based; see backend/app/services/reputation.py)
++  reputationMethodology: () => request('/reputation/methodology'),
++  reputationTransporters: () => request('/reputation/transporters', { auth: true }),
++  reputationTransporter: (id) => request(`/reputation/transporters/${id}`, { auth: true }),
++  reputationBuyers: () => request('/reputation/buyers', { auth: true }),
++  reputationBuyer: (id) => request(`/reputation/buyers/${id}`, { auth: true }),
++  myReputationEvidence: () => request('/reputation/me/evidence', { auth: true }),
++  recordBuyerOutcome: (payload) => request('/reputation/records', { method: 'POST', body: payload, auth: true }),
++  recordFinalCharge: (requestId, finalCharge) => request(`/reputation/transport/${requestId}/final-charge`, { method: 'POST', body: { final_charge: finalCharge }, auth: true }),
++  raiseReputationDispute: (payload) => request('/reputation/disputes', { method: 'POST', body: payload, auth: true }),
++  myReputationDisputes: () => request('/reputation/disputes/mine', { auth: true }),
++  adminReputationDisputes: (adminToken, status) => request(`/reputation/admin/disputes${status ? `?status=${status}` : ''}`, { auth: true, token: adminToken }),
++  adminDecideReputationDispute: (adminToken, id, payload) => request(`/reputation/admin/disputes/${id}`, { method: 'PATCH', body: payload, auth: true, token: adminToken }),
+   rateAsBuyer: (payload) => request('/ratings/buyer-rates-farmer', { method: 'POST', body: payload, auth: true }),
+   rateAsFarmer: (payload) => request('/ratings/farmer-rates-buyer', { method: 'POST', body: payload, auth: true }),
+   ratingsForBuyer: (buyerId) => request(`/ratings/for-buyer/${buyerId}`),
+diff --git a/frontend/src/components/Layout.jsx b/frontend/src/components/Layout.jsx
+index 5764675..7ee7832 100644
+--- a/frontend/src/components/Layout.jsx
++++ b/frontend/src/components/Layout.jsx
+@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
+ import {
+   Home, Target, BarChart3, Package, TrendingUp, Store, ShoppingCart, Boxes,
+   Briefcase, Calculator, Truck, Users, Warehouse, Handshake, Bot,
+-  MessageCircle, Bell, User, ShieldCheck, LogOut, Sun, Moon,
++  MessageCircle, Bell, User, ShieldCheck, Scale, LogOut, Sun, Moon,
+ } from 'lucide-react'
+ import { useAuth } from '../context/AuthContext'
+ import { useTheme } from '../context/ThemeContext'
+@@ -26,6 +26,7 @@ function useNavGroups(role, t) {
+       {
+         heading: t('navAccount'),
+         links: [
++          { to: '/my-reputation', label: t('navMyReputation'), Icon: Scale },
+           { to: '/profile', label: t('navProfile'), Icon: User },
+         ],
+       },
+@@ -49,6 +50,7 @@ function useNavGroups(role, t) {
+           { to: '/lots', label: t('navLots'), Icon: Boxes },
+           { to: '/transactions', label: t('navTransactions'), Icon: Briefcase },
+           { to: '/buyer-verification', label: t('navVerification'), Icon: ShieldCheck },
++          { to: '/my-reputation', label: t('navMyReputation'), Icon: Scale },
+         ],
+       },
+       {
+@@ -83,6 +85,7 @@ function useNavGroups(role, t) {
+         { to: '/buyer-demands', label: t('navBuyerDemands'), Icon: ShoppingCart },
+         { to: '/lots', label: t('navLots'), Icon: Boxes },
+         { to: '/transactions', label: t('navTransactions'), Icon: Briefcase },
++        { to: '/partners', label: t('navPartners'), Icon: ShieldCheck },
+       ],
+     },
+     {
+diff --git a/frontend/src/components/RecordBuyerOutcome.jsx b/frontend/src/components/RecordBuyerOutcome.jsx
+new file mode 100644
+index 0000000..fc53108
+--- /dev/null
++++ b/frontend/src/components/RecordBuyerOutcome.jsx
+@@ -0,0 +1,56 @@
++import React, { useState } from 'react'
++import { api } from '../api/client'
++import { useI18n } from '../i18n/I18nContext'
++
++const METRICS = [
++  { metric: 'BUYER_PICKUP', labelKey: 'reputation.record.pickup', results: ['ON_TIME', 'LATE', 'NO_SHOW'] },
++  { metric: 'BUYER_TERMS', labelKey: 'reputation.record.terms', results: ['AS_AGREED', 'DEVIATED'] },
++]
++
++/**
++ * Farmer records what actually happened with the buyer on this transaction.
++ * This is the only source of buyer pickup / terms evidence -- nothing is
++ * assumed. The buyer can see and contest what is recorded here.
++ */
++export default function RecordBuyerOutcome({ transactionId }) {
++  const { t } = useI18n()
++  const [choice, setChoice] = useState({})
++  const [done, setDone] = useState({})
++  const [busy, setBusy] = useState(null)
++  const [error, setError] = useState('')
++
++  async function save(metric) {
++    setBusy(metric); setError('')
++    try {
++      await api.recordBuyerOutcome({ transaction_id: transactionId, metric, result: choice[metric] })
++      setDone(d => ({ ...d, [metric]: true }))
++    } catch (e) { setError(e.message) } finally { setBusy(null) }
++  }
++
++  return (
++    <div className="space-y-3">
++      <p className="text-xs text-ink/60 dark:text-paper/60">{t('reputation.record.hint')}</p>
++      {error && <p className="text-xs text-red-600">{error}</p>}
++      {METRICS.map(({ metric, labelKey, results }) => (
++        <div key={metric} className="flex flex-wrap items-center gap-2">
++          <span className="text-sm font-medium w-32">{t(labelKey)}</span>
++          {done[metric] ? (
++            <span className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold">{t('reputation.record.saved')}</span>
++          ) : (
++            <>
++              <select value={choice[metric] || ''} onChange={e => setChoice(c => ({ ...c, [metric]: e.target.value }))}
++                className="border border-black/10 dark:border-white/20 rounded-lg px-2 py-1 text-sm bg-transparent">
++                <option value="">{t('reputation.record.choose')}</option>
++                {results.map(r => <option key={r} value={r}>{t(`reputation.result.${r}`)}</option>)}
++              </select>
++              <button disabled={!choice[metric] || busy === metric} onClick={() => save(metric)}
++                className="bg-forest text-paper text-xs font-semibold rounded-lg px-3 py-1.5 disabled:opacity-50">
++                {t('reputation.record.save')}
++              </button>
++            </>
++          )}
++        </div>
++      ))}
++    </div>
++  )
++}
+diff --git a/frontend/src/components/RecordFinalCharge.jsx b/frontend/src/components/RecordFinalCharge.jsx
+new file mode 100644
+index 0000000..9ac5e48
+--- /dev/null
++++ b/frontend/src/components/RecordFinalCharge.jsx
+@@ -0,0 +1,41 @@
++import React, { useState } from 'react'
++import { api } from '../api/client'
++import { useI18n } from '../i18n/I18nContext'
++
++/**
++ * Shown to the farmer on a delivered trip. The amount is compared with the
++ * agreed price to measure quote accuracy; it can be recorded once and the
++ * transport agency can contest it.
++ */
++export default function RecordFinalCharge({ trip, onRecorded }) {
++  const { t } = useI18n()
++  const [amount, setAmount] = useState('')
++  const [busy, setBusy] = useState(false)
++  const [error, setError] = useState('')
++  const [saved, setSaved] = useState(trip.final_charge ?? null)
++
++  if (!['DELIVERED', 'COMPLETED'].includes(trip.status)) return null
++  if (saved !== null) {
++    return <p className="text-xs text-ink/60 dark:text-paper/60 mt-2">{t('reputation.finalCharge.recorded', { amount: saved })}</p>
++  }
++  async function save() {
++    setBusy(true); setError('')
++    try {
++      const r = await api.recordFinalCharge(trip.id, Number(amount))
++      setSaved(r.final_charge); onRecorded && onRecorded(r)
++    } catch (e) { setError(e.message) } finally { setBusy(false) }
++  }
++  return (
++    <div className="mt-3 bg-wheat/40 dark:bg-white/5 rounded-lg p-3">
++      <div className="text-sm font-semibold mb-1">{t('reputation.finalCharge.title')}</div>
++      <p className="text-xs text-ink/60 dark:text-paper/60 mb-2">{t('reputation.finalCharge.hint')}</p>
++      {error && <p className="text-xs text-red-600 mb-1">{error}</p>}
++      <div className="flex gap-2">
++        <input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="₹"
++          className="border border-black/10 dark:border-white/20 rounded-lg px-2 py-1 text-sm bg-transparent w-32" />
++        <button disabled={!(Number(amount) > 0) || busy} onClick={save}
++          className="bg-forest text-paper text-xs font-semibold rounded-lg px-3 py-1.5 disabled:opacity-50">{t('reputation.record.save')}</button>
++      </div>
++    </div>
++  )
++}
+diff --git a/frontend/src/components/ReputationBadge.jsx b/frontend/src/components/ReputationBadge.jsx
+new file mode 100644
+index 0000000..2aad0b1
+--- /dev/null
++++ b/frontend/src/components/ReputationBadge.jsx
+@@ -0,0 +1,47 @@
++import React, { useEffect, useState } from 'react'
++import { api } from '../api/client'
++import { useI18n } from '../i18n/I18nContext'
++import ReputationProfile, { StatusChip, SummaryLine } from './ReputationProfile'
++
++// One fetch per partner per page load, even when a partner appears in many rows.
++const cache = new Map()
++
++/**
++ * Compact reputation chip for a buyer or transport agency, with an optional
++ * "why" panel. Renders nothing while loading or on error rather than
++ * guessing -- a missing badge is never shown as a bad one.
++ */
++export default function ReputationBadge({ type, id, className = '' }) {
++  const { t } = useI18n()
++  const [profile, setProfile] = useState(null)
++  const [open, setOpen] = useState(false)
++
++  useEffect(() => {
++    let live = true
++    if (!id) return
++    const key = `${type}:${id}`
++    if (!cache.has(key)) {
++      cache.set(key, (type === 'buyer' ? api.reputationBuyer(id) : api.reputationTransporter(id)).catch(() => { cache.delete(key); return null }))
++    }
++    cache.get(key).then(p => { if (live && p) setProfile(p) })
++    return () => { live = false }
++  }, [type, id])
++
++  if (!profile) return null
++  return (
++    <div className={className}>
++      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
++        <StatusChip profile={profile} />
++        <SummaryLine profile={profile} />
++        <button type="button" onClick={() => setOpen(o => !o)} className="text-xs text-forest font-semibold underline">
++          {open ? t('reputation.hide') : t('reputation.whyThis')}
++        </button>
++      </div>
++      {open && (
++        <div className="mt-2 bg-white dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-lg p-3">
++          <ReputationProfile profile={profile} />
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/frontend/src/components/ReputationDisputesAdmin.jsx b/frontend/src/components/ReputationDisputesAdmin.jsx
+new file mode 100644
+index 0000000..59bcffc
+--- /dev/null
++++ b/frontend/src/components/ReputationDisputesAdmin.jsx
+@@ -0,0 +1,67 @@
++import React, { useCallback, useEffect, useState } from 'react'
++import { api } from '../api/client'
++import { useI18n } from '../i18n/I18nContext'
++import { formatTimestamp } from '../utils/datetime'
++import Badge from './Badge'
++
++const TONE = { OPEN: 'warning', UNDER_REVIEW: 'info', UPHELD: 'success', REJECTED: 'neutral' }
++
++/** Admin queue for partners contesting reputation evidence. A written reason is required to decide. */
++export default function ReputationDisputesAdmin({ token }) {
++  const { t } = useI18n()
++  const [rows, setRows] = useState(null)
++  const [filter, setFilter] = useState('')
++  const [notes, setNotes] = useState({})
++  const [error, setError] = useState('')
++
++  const load = useCallback(() => {
++    api.adminReputationDisputes(token, filter || undefined).then(setRows).catch(e => setError(e.message))
++  }, [token, filter])
++  useEffect(() => { load() }, [load])
++
++  async function decide(id, status) {
++    setError('')
++    try { await api.adminDecideReputationDispute(token, id, { status, admin_note: notes[id] || '' }); load() }
++    catch (e) { setError(e.message) }
++  }
++
++  return (
++    <div className="mt-10">
++      <div className="flex items-center justify-between mb-2">
++        <h2 className="font-display text-2xl font-bold">{t('reputation.admin.title')}</h2>
++        <select value={filter} onChange={e => setFilter(e.target.value)} className="border border-black/10 dark:border-white/20 rounded-lg px-2 py-1 text-sm bg-transparent">
++          <option value="">{t('reputation.admin.all')}</option>
++          {Object.keys(TONE).map(s => <option key={s} value={s}>{t(`reputation.dispute.${s}`)}</option>)}
++        </select>
++      </div>
++      <p className="text-sm text-ink/60 dark:text-paper/60 mb-4">{t('reputation.admin.desc')}</p>
++      {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
++      {rows && rows.length === 0 && <p className="text-sm text-ink/40 dark:text-paper/40">{t('reputation.admin.empty')}</p>}
++      <div className="space-y-3">
++        {(rows || []).map(d => (
++          <div key={d.id} className="bg-white dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/10 p-4 text-sm">
++            <div className="flex items-center justify-between gap-2">
++              <span className="font-semibold">{t(`reputation.role.${d.subject_role}`)} #{d.subject_id} · {d.target_type} #{d.target_id}</span>
++              <Badge tone={TONE[d.status]}>{t(`reputation.dispute.${d.status}`)}</Badge>
++            </div>
++            <p className="mt-1">{d.reason}</p>
++            {(d.evidence_urls || []).map(u => <a key={u} href={u} target="_blank" rel="noreferrer" className="block text-xs text-forest underline truncate">{u}</a>)}
++            <div className="text-xs text-ink/50 dark:text-paper/50 mt-1">{formatTimestamp(d.created_at)}</div>
++            {d.admin_note && <p className="text-xs mt-1">{t('reputation.dispute.reviewerNote')}: {d.admin_note}</p>}
++            {['OPEN', 'UNDER_REVIEW'].includes(d.status) && (
++              <div className="mt-3 space-y-2">
++                <textarea rows={2} value={notes[d.id] || ''} onChange={e => setNotes(n => ({ ...n, [d.id]: e.target.value }))}
++                  placeholder={t('reputation.admin.notePlaceholder')} className="w-full border border-black/10 dark:border-white/20 rounded-lg px-2 py-1 text-sm bg-transparent" />
++                <div className="flex flex-wrap gap-2">
++                  {d.status === 'OPEN' && <button onClick={() => decide(d.id, 'UNDER_REVIEW')} className="text-xs font-semibold border border-black/10 dark:border-white/20 rounded-lg px-3 py-1.5">{t('reputation.admin.underReview')}</button>}
++                  <button onClick={() => decide(d.id, 'UPHELD')} className="text-xs font-semibold bg-forest text-paper rounded-lg px-3 py-1.5">{t('reputation.admin.uphold')}</button>
++                  <button onClick={() => decide(d.id, 'REJECTED')} className="text-xs font-semibold border border-black/10 dark:border-white/20 rounded-lg px-3 py-1.5">{t('reputation.admin.reject')}</button>
++                </div>
++              </div>
++            )}
++          </div>
++        ))}
++      </div>
++    </div>
++  )
++}
+diff --git a/frontend/src/components/ReputationProfile.jsx b/frontend/src/components/ReputationProfile.jsx
+new file mode 100644
+index 0000000..c6adbbb
+--- /dev/null
++++ b/frontend/src/components/ReputationProfile.jsx
+@@ -0,0 +1,109 @@
++import React from 'react'
++import { useI18n } from '../i18n/I18nContext'
++import { formatDate } from '../utils/datetime'
++import Badge from './Badge'
++
++/**
++ * Renders one partner's evidence-based profile exactly as the backend
++ * computed it (app/services/reputation.py). It never derives, rounds up or
++ * fills in a number: an indicator with no evidence says "Not recorded yet",
++ * and a partner without enough history is labelled "Insufficient history"
++ * in neutral grey -- never as a poor score.
++ */
++export function StatusChip({ profile }) {
++  const { t } = useI18n()
++  return profile.sufficient_history
++    ? <Badge tone="success">{t('reputation.established')}</Badge>
++    : <Badge tone="neutral">{t('reputation.insufficient')}</Badge>
++}
++
++export function SummaryLine({ profile }) {
++  const { t } = useI18n()
++  const last = profile.recency?.last_activity_at
++  return (
++    <span className="text-xs text-ink/60 dark:text-paper/60">
++      {t('reputation.completedCount', { n: profile.completed_outcomes })}
++      {' · '}
++      {last ? t('reputation.lastActivity', { date: formatDate(last) }) : t('reputation.noActivity')}
++    </span>
++  )
++}
++
++function Indicator({ ind, simulated }) {
++  const { t } = useI18n()
++  const measured = ind.status === 'measured'
++  return (
++    <div className="flex items-start justify-between gap-3 py-2 border-b border-black/5 dark:border-white/10 last:border-0" title={ind.detail || ''}>
++      <div>
++        <div className="text-sm font-medium">{t(`reputation.ind.${ind.key}`)}</div>
++        {measured && ind.last_event_at && (
++          <div className="text-xs text-ink/50 dark:text-paper/50">{t('reputation.lastEvent', { date: formatDate(ind.last_event_at) })}</div>
++        )}
++        {ind.excluded_under_review > 0 && (
++          <div className="text-xs text-amber-700 dark:text-amber-400">{t('reputation.excluded', { n: ind.excluded_under_review })}</div>
++        )}
++        {simulated > 0 && ind.key === 'payment_status' && (
++          <div className="text-xs text-ink/50 dark:text-paper/50">{t('reputation.simulatedExcluded', { n: simulated })}</div>
++        )}
++      </div>
++      <div className="text-right shrink-0">
++        {measured ? (
++          <>
++            <div className="font-mono-data font-semibold">{Math.round(ind.value * 100)}%</div>
++            <div className="text-xs text-ink/50 dark:text-paper/50">{t('reputation.sample', { num: ind.numerator, den: ind.denominator })}</div>
++          </>
++        ) : (
++          <div className="text-xs text-ink/40 dark:text-paper/40">{t('reputation.notRecorded')}</div>
++        )}
++      </div>
++    </div>
++  )
++}
++
++export default function ReputationProfile({ profile }) {
++  const { t } = useI18n()
++  const h = profile.trip_history || profile.transaction_history || {}
++  const c = profile.complaints_and_disputes
++  const fb = profile.farmer_feedback
++  const pay = profile.indicators.find(i => i.key === 'payment_status')
++  const historyKeys = profile.partner_type === 'transporter'
++    ? [['completed', 'reputation.h.completed'], ['cancelled_by_agency', 'reputation.h.cancelledByAgency'],
++       ['cancelled_other_or_unrecorded', 'reputation.h.cancelledOther'], ['contested_items_under_review', 'reputation.h.contested']]
++    : [['completed', 'reputation.h.completed'], ['cancelled', 'reputation.h.cancelled'], ['in_progress', 'reputation.h.inProgress']]
++
++  return (
++    <div className="space-y-3">
++      {!profile.sufficient_history && (
++        <p className="text-xs text-ink/60 dark:text-paper/60 bg-wheat/40 dark:bg-white/5 rounded-lg px-3 py-2">
++          {t('reputation.insufficientDesc', { min: profile.minimum_required, done: profile.completed_outcomes })}
++        </p>
++      )}
++      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink/60 dark:text-paper/60">
++        {historyKeys.map(([k, key]) => <span key={k}>{t(key)}: <b className="font-mono-data">{h[k] ?? 0}</b></span>)}
++        {profile.recency && (
++          <span>{t('reputation.recent', { n: profile.recency['events_last_90_days'] ?? 0, days: 90 })}</span>
++        )}
++      </div>
++      <div>{profile.indicators.map(ind => <Indicator key={ind.key} ind={ind} simulated={ind.key === 'payment_status' ? (pay?.simulated_payments_excluded || 0) : 0} />)}</div>
++      {c && (
++        <div className="text-xs">
++          <div className="font-semibold text-sm mb-0.5">{t('reputation.complaints')}</div>
++          <div className="text-ink/70 dark:text-paper/70">
++            {t('reputation.complaintsLine', { recorded: c.recorded, pending: c.pending_review, resolved: c.resolved, dismissed: c.dismissed })}
++          </div>
++          <div className="text-ink/50 dark:text-paper/50 mt-0.5">{t('reputation.complaintsNote')}</div>
++        </div>
++      )}
++      {fb && fb.count > 0 && (
++        <div className="text-xs text-ink/70 dark:text-paper/70">
++          {t('reputation.feedbackLine', { n: fb.count, avg: fb.average_overall })}
++        </div>
++      )}
++      {profile.ranking && (
++        <div className="text-xs text-ink/50 dark:text-paper/50">
++          {profile.ranking.position ? t('reputation.rank', { n: profile.ranking.position }) : t('reputation.unranked')}
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/frontend/src/i18n/translations/bn.json b/frontend/src/i18n/translations/bn.json
+index f012868..24790cc 100644
+--- a/frontend/src/i18n/translations/bn.json
++++ b/frontend/src/i18n/translations/bn.json
+@@ -1453,5 +1453,103 @@
+   "buyerDemands.paymentTerms.neftWithin3Days": "৩ দিনের মধ্যে NEFT",
+   "buyerDemands.paymentTerms.advance50BalanceOnDelivery": "৫০% অগ্রিম, বাকি ডেলিভারিতে",
+   "buyerDemands.paymentTerms.fullPaymentOnDelivery": "ডেলিভারিতে সম্পূর্ণ পেমেন্ট",
+-  "buyerDemands.paymentTerms.fullPaymentWithin7Days": "৭ দিনের মধ্যে সম্পূর্ণ পেমেন্ট"
++  "buyerDemands.paymentTerms.fullPaymentWithin7Days": "৭ দিনের মধ্যে সম্পূর্ণ পেমেন্ট",
++  "navPartners": "অংশীদারের সুনাম",
++  "navMyReputation": "আমার সুনাম",
++  "reputation.title": "অংশীদারের সুনাম",
++  "reputation.subtitle": "CropWise-এ নথিভুক্ত কার্যকলাপের ভিত্তিতে, স্টার রেটিং নয়। শুধু দাম নয়, প্রমাণও তুলনা করুন।",
++  "reputation.howItWorks": "এটি কীভাবে কাজ করে",
++  "reputation.tab.transporters": "পরিবহন সংস্থা",
++  "reputation.tab.buyers": "ক্রেতা",
++  "reputation.none": "এখনও কোনো অংশীদার নেই।",
++  "reputation.hide": "বিবরণ লুকান",
++  "reputation.whyThis": "প্রমাণ দেখুন",
++  "reputation.established": "প্রমাণভিত্তিক প্রোফাইল",
++  "reputation.insufficient": "অপর্যাপ্ত ইতিহাস",
++  "reputation.insufficientDesc": "এখন পর্যন্ত {{min}}-এর কম সম্পূর্ণ ফলাফল ({{done}})। এটি খারাপ রেটিং নয়।",
++  "reputation.completedCount": "{{n}}টি সম্পূর্ণ",
++  "reputation.lastActivity": "শেষ কার্যকলাপ {{date}}",
++  "reputation.noActivity": "এখনও কোনো কার্যকলাপ নেই",
++  "reputation.lastEvent": "সর্বশেষ: {{date}}",
++  "reputation.recent": "গত {{days}} দিনে {{n}}টি",
++  "reputation.notRecorded": "এখনও নথিভুক্ত নয়",
++  "reputation.sample": "{{den}}-এর মধ্যে {{num}}",
++  "reputation.excluded": "{{n}}টি পর্যালোচনাধীন (গণনা হয়নি)",
++  "reputation.simulatedExcluded": "{{n}}টি সিমুলেটেড পেমেন্ট গণনা হয়নি",
++  "reputation.ind.on_time_pickup": "সময়মতো পিকআপ",
++  "reputation.ind.on_time_delivery": "সময়মতো ডেলিভারি",
++  "reputation.ind.quote_accuracy": "কোটের নির্ভুলতা",
++  "reputation.ind.trip_fulfilment": "সম্পূর্ণ ট্রিপ বনাম সংস্থা বাতিল",
++  "reputation.ind.terms_adherence": "সম্মত শর্ত পালন",
++  "reputation.ind.pickup_reliability": "পিকআপের নির্ভরযোগ্যতা",
++  "reputation.ind.payment_status": "পেমেন্টের অবস্থা",
++  "reputation.h.completed": "সম্পূর্ণ",
++  "reputation.h.cancelledByAgency": "সংস্থা বাতিল করেছে",
++  "reputation.h.cancelledOther": "বাতিল (অন্য / কারণ নথিভুক্ত নয়)",
++  "reputation.h.contested": "পর্যালোচনাধীন",
++  "reputation.h.cancelled": "বাতিল",
++  "reputation.h.inProgress": "চলমান",
++  "reputation.complaints": "অভিযোগ",
++  "reputation.complaintsLine": "{{recorded}}টি নথিভুক্ত · {{pending}}টি পর্যালোচনা বাকি · {{resolved}}টি নিষ্পত্তি · {{dismissed}}টি খারিজ",
++  "reputation.complaintsNote": "মুলতুবি অভিযোগ কেবল দাবি এবং অংশীদারের বিরুদ্ধে গণনা করা হয় না।",
++  "reputation.feedbackLine": "কৃষকের মতামত: {{n}}টি রিভিউ, গড় {{avg}}/5 (মত; র‍্যাঙ্কিংয়ে ব্যবহৃত নয়)",
++  "reputation.rank": "প্রতিষ্ঠিত অংশীদারদের মধ্যে র‍্যাঙ্ক #{{n}}",
++  "reputation.unranked": "এখনও র‍্যাঙ্ক নেই",
++  "reputation.method.recorded": "প্রতিটি সংখ্যা নথিভুক্ত ট্রিপ, লেনদেন ও অভিযোগ থেকে আসে। কিছুই অনুমান বা আগে থেকে পূরণ করা নয়।",
++  "reputation.method.sample": "প্রতিটি সূচক কতগুলি রেকর্ডের ভিত্তিতে এবং সর্বশেষ তারিখ দেখায়।",
++  "reputation.method.insufficient": "কম ইতিহাসের অংশীদারদের \"অপর্যাপ্ত ইতিহাস\" বলা হয়, কম নম্বর দেওয়া হয় না।",
++  "reputation.method.contested": "অংশীদার যে প্রমাণে আপত্তি জানায়, পর্যালোচনার সময় তা তার হারে গণনা হয় না।",
++  "reputation.method.simulated": "সিমুলেটেড (ডেমো) পেমেন্ট কখনও গণনা হয় না।",
++  "reputation.method.noScore": "কোনো একক স্কোর নেই। র‍্যাঙ্কিং পরিসংখ্যানগত নিম্নসীমা ব্যবহার করে, তাই অল্প রেকর্ড তালিকার শীর্ষে উঠতে পারে না। অতীত কার্যকলাপ ভবিষ্যৎ কর্মক্ষমতার নিশ্চয়তা নয়।",
++  "reputation.record.title": "ক্রেতার আচরণ কেমন ছিল?",
++  "reputation.record.hint": "বাস্তবে যা ঘটেছে তা নথিভুক্ত করুন। ক্রেতা এটি দেখতে ও আপত্তি জানাতে পারবেন।",
++  "reputation.record.pickup": "পিকআপ",
++  "reputation.record.terms": "সম্মত শর্ত",
++  "reputation.record.choose": "বেছে নিন…",
++  "reputation.record.save": "সংরক্ষণ করুন",
++  "reputation.record.saved": "নথিভুক্ত হয়েছে",
++  "reputation.result.ON_TIME": "সময়মতো",
++  "reputation.result.LATE": "দেরিতে",
++  "reputation.result.NO_SHOW": "আসেননি",
++  "reputation.result.AS_AGREED": "সম্মত অনুযায়ী",
++  "reputation.result.DEVIATED": "চুক্তি থেকে সরে গেছে",
++  "reputation.finalCharge.title": "চূড়ান্ত বিল করা অর্থ (₹)",
++  "reputation.finalCharge.hint": "কোটের নির্ভুলতা মাপতে সম্মত দামের সঙ্গে তুলনা করা হয়। একবারই নথিভুক্ত হয়; সংস্থা আপত্তি জানাতে পারে।",
++  "reputation.finalCharge.recorded": "চূড়ান্ত অর্থ নথিভুক্ত: ₹{{amount}}",
++  "reputation.my.title": "আমার সুনাম",
++  "reputation.my.subtitle": "কৃষকরা এটাই দেখেন। ভুল মনে হলে যেকোনো প্রমাণে আপনি আপত্তি জানাতে পারেন।",
++  "reputation.my.evidence": "আপনার প্রোফাইলের পেছনের প্রমাণ",
++  "reputation.my.noEvidence": "এখনও কিছু নথিভুক্ত নেই।",
++  "reputation.my.trip": "ট্রিপ #{{id}}",
++  "reputation.my.record": "লেনদেন #{{id}}-এর ফলাফল",
++  "reputation.my.contest": "আপত্তি জানান",
++  "reputation.my.reasonPlaceholder": "কী ভুল তা লিখুন (কমপক্ষে ১০ অক্ষর)",
++  "reputation.my.submit": "আপত্তি জমা দিন",
++  "reputation.dispute.OPEN": "খোলা",
++  "reputation.dispute.UNDER_REVIEW": "পর্যালোচনাধীন",
++  "reputation.dispute.UPHELD": "গৃহীত: প্রমাণ বাদ",
++  "reputation.dispute.REJECTED": "প্রত্যাখ্যাত: প্রমাণ গণনায় থাকবে",
++  "reputation.dispute.reviewerNote": "পর্যালোচকের মন্তব্য",
++  "reputation.field.status": "অবস্থা",
++  "reputation.field.scheduled_pickup": "নির্ধারিত পিকআপ",
++  "reputation.field.agreed_price": "সম্মত দাম",
++  "reputation.field.final_charge": "চূড়ান্ত অর্থ",
++  "reputation.field.cancelled_by": "কে বাতিল করেছে",
++  "reputation.field.promised_delivery_by": "ডেলিভারির প্রতিশ্রুতি",
++  "reputation.field.metric": "পরিমাপ",
++  "reputation.field.result": "ফলাফল",
++  "reputation.field.note": "মন্তব্য",
++  "reputation.field.picked_up_at": "পিকআপ হয়েছে",
++  "reputation.field.delivered_at": "ডেলিভারি হয়েছে",
++  "reputation.field.recorded_at": "নথিভুক্তের তারিখ",
++  "reputation.role.buyer": "ক্রেতা",
++  "reputation.role.transporter": "পরিবহন সংস্থা",
++  "reputation.admin.title": "সুনাম বিরোধ",
++  "reputation.admin.all": "সব অবস্থা",
++  "reputation.admin.desc": "অংশীদাররা নথিভুক্ত প্রমাণে আপত্তি জানাচ্ছেন। সিদ্ধান্তের জন্য লিখিত কারণ প্রয়োজন।",
++  "reputation.admin.empty": "কোনো বিরোধ নেই।",
++  "reputation.admin.notePlaceholder": "লিখিত কারণ (সিদ্ধান্তের জন্য প্রয়োজন)",
++  "reputation.admin.underReview": "পর্যালোচনাধীন করুন",
++  "reputation.admin.uphold": "গ্রহণ করুন (প্রমাণ বাদ)",
++  "reputation.admin.reject": "প্রত্যাখ্যান করুন (প্রমাণ গণনায়)"
+ }
+diff --git a/frontend/src/i18n/translations/en.json b/frontend/src/i18n/translations/en.json
+index 53693c9..eed1e12 100644
+--- a/frontend/src/i18n/translations/en.json
++++ b/frontend/src/i18n/translations/en.json
+@@ -1495,5 +1495,103 @@
+   "negotiation.accept": "Accept these terms",
+   "negotiation.counter": "Counteroffer",
+   "negotiation.reject": "Reject",
+-  "negotiation.withdraw": "Withdraw my proposal"
++  "negotiation.withdraw": "Withdraw my proposal",
++  "navPartners": "Partner reputation",
++  "navMyReputation": "My reputation",
++  "reputation.title": "Partner reputation",
++  "reputation.subtitle": "Based on recorded activity on CropWise, not star ratings. Compare evidence, not just price.",
++  "reputation.howItWorks": "How this works",
++  "reputation.tab.transporters": "Transport agencies",
++  "reputation.tab.buyers": "Buyers",
++  "reputation.none": "No partners yet.",
++  "reputation.hide": "Hide details",
++  "reputation.whyThis": "See evidence",
++  "reputation.established": "Evidence-based profile",
++  "reputation.insufficient": "Insufficient history",
++  "reputation.insufficientDesc": "Fewer than {{min}} completed outcomes so far ({{done}}). This is not a poor rating.",
++  "reputation.completedCount": "{{n}} completed",
++  "reputation.lastActivity": "Last activity {{date}}",
++  "reputation.noActivity": "No activity yet",
++  "reputation.lastEvent": "Latest: {{date}}",
++  "reputation.recent": "{{n}} in last {{days}} days",
++  "reputation.notRecorded": "Not recorded yet",
++  "reputation.sample": "{{num}} of {{den}}",
++  "reputation.excluded": "{{n}} under review (not counted)",
++  "reputation.simulatedExcluded": "{{n}} simulated payments are not counted",
++  "reputation.ind.on_time_pickup": "On-time pickup",
++  "reputation.ind.on_time_delivery": "On-time delivery",
++  "reputation.ind.quote_accuracy": "Quote accuracy",
++  "reputation.ind.trip_fulfilment": "Trips completed vs cancelled by agency",
++  "reputation.ind.terms_adherence": "Adherence to agreed terms",
++  "reputation.ind.pickup_reliability": "Pickup reliability",
++  "reputation.ind.payment_status": "Payment status",
++  "reputation.h.completed": "Completed",
++  "reputation.h.cancelledByAgency": "Cancelled by agency",
++  "reputation.h.cancelledOther": "Cancelled (other / cause not recorded)",
++  "reputation.h.contested": "Under review",
++  "reputation.h.cancelled": "Cancelled",
++  "reputation.h.inProgress": "In progress",
++  "reputation.complaints": "Complaints",
++  "reputation.complaintsLine": "{{recorded}} recorded · {{pending}} pending review · {{resolved}} resolved · {{dismissed}} dismissed",
++  "reputation.complaintsNote": "Pending complaints are allegations and are not counted against the partner.",
++  "reputation.feedbackLine": "Farmer feedback: {{n}} reviews, average {{avg}}/5 (opinion; not used in ranking)",
++  "reputation.rank": "Rank #{{n}} among established partners",
++  "reputation.unranked": "Not ranked yet",
++  "reputation.method.recorded": "Every figure comes from recorded trips, transactions and complaints. Nothing is estimated or pre-filled.",
++  "reputation.method.sample": "Each indicator shows how many records it is based on and the latest date.",
++  "reputation.method.insufficient": "Partners with too little history are labelled \"Insufficient history\", never scored low.",
++  "reputation.method.contested": "Evidence a partner contests is left out of their rates while it is reviewed.",
++  "reputation.method.simulated": "Simulated (demo) payments are never counted.",
++  "reputation.method.noScore": "There is no single score. Ranking uses a statistical lower bound, so a few records cannot top the list. Past activity does not guarantee future performance.",
++  "reputation.record.title": "How did the buyer do?",
++  "reputation.record.hint": "Record what actually happened. The buyer can see this and contest it.",
++  "reputation.record.pickup": "Pickup",
++  "reputation.record.terms": "Agreed terms",
++  "reputation.record.choose": "Choose…",
++  "reputation.record.save": "Save",
++  "reputation.record.saved": "Recorded",
++  "reputation.result.ON_TIME": "On time",
++  "reputation.result.LATE": "Late",
++  "reputation.result.NO_SHOW": "No-show",
++  "reputation.result.AS_AGREED": "As agreed",
++  "reputation.result.DEVIATED": "Deviated from agreement",
++  "reputation.finalCharge.title": "Final charge billed (₹)",
++  "reputation.finalCharge.hint": "Compared with the agreed price to measure quote accuracy. Recorded once; the agency can contest it.",
++  "reputation.finalCharge.recorded": "Final charge recorded: ₹{{amount}}",
++  "reputation.my.title": "My reputation",
++  "reputation.my.subtitle": "This is what farmers see. You can contest any item you believe is wrong.",
++  "reputation.my.evidence": "Evidence behind your profile",
++  "reputation.my.noEvidence": "Nothing recorded yet.",
++  "reputation.my.trip": "Trip #{{id}}",
++  "reputation.my.record": "Outcome on transaction #{{id}}",
++  "reputation.my.contest": "Contest",
++  "reputation.my.reasonPlaceholder": "Explain what is wrong (at least 10 characters)",
++  "reputation.my.submit": "Submit contest",
++  "reputation.dispute.OPEN": "Open",
++  "reputation.dispute.UNDER_REVIEW": "Under review",
++  "reputation.dispute.UPHELD": "Upheld: item excluded",
++  "reputation.dispute.REJECTED": "Rejected: item counts",
++  "reputation.dispute.reviewerNote": "Reviewer note",
++  "reputation.field.status": "Status",
++  "reputation.field.scheduled_pickup": "Scheduled pickup",
++  "reputation.field.agreed_price": "Agreed price",
++  "reputation.field.final_charge": "Final charge",
++  "reputation.field.cancelled_by": "Cancelled by",
++  "reputation.field.promised_delivery_by": "Promised delivery by",
++  "reputation.field.metric": "Measure",
++  "reputation.field.result": "Result",
++  "reputation.field.note": "Note",
++  "reputation.field.picked_up_at": "Picked up",
++  "reputation.field.delivered_at": "Delivered",
++  "reputation.field.recorded_at": "Recorded on",
++  "reputation.role.buyer": "Buyer",
++  "reputation.role.transporter": "Transport agency",
++  "reputation.admin.title": "Reputation disputes",
++  "reputation.admin.all": "All statuses",
++  "reputation.admin.desc": "Partners contesting recorded evidence. A written reason is required to decide.",
++  "reputation.admin.empty": "No disputes.",
++  "reputation.admin.notePlaceholder": "Written reason (required to decide)",
++  "reputation.admin.underReview": "Mark under review",
++  "reputation.admin.uphold": "Uphold (exclude item)",
++  "reputation.admin.reject": "Reject (item counts)"
+ }
+diff --git a/frontend/src/i18n/translations/hi.json b/frontend/src/i18n/translations/hi.json
+index 49a2abd..a2c7bc6 100644
+--- a/frontend/src/i18n/translations/hi.json
++++ b/frontend/src/i18n/translations/hi.json
+@@ -1453,5 +1453,103 @@
+   "buyerDemands.paymentTerms.neftWithin3Days": "3 दिनों के भीतर NEFT",
+   "buyerDemands.paymentTerms.advance50BalanceOnDelivery": "50% अग्रिम, शेष डिलीवरी पर",
+   "buyerDemands.paymentTerms.fullPaymentOnDelivery": "डिलीवरी पर पूर्ण भुगतान",
+-  "buyerDemands.paymentTerms.fullPaymentWithin7Days": "7 दिनों के भीतर पूर्ण भुगतान"
++  "buyerDemands.paymentTerms.fullPaymentWithin7Days": "7 दिनों के भीतर पूर्ण भुगतान",
++  "navPartners": "साझेदार प्रतिष्ठा",
++  "navMyReputation": "मेरी प्रतिष्ठा",
++  "reputation.title": "साझेदार प्रतिष्ठा",
++  "reputation.subtitle": "CropWise पर दर्ज गतिविधि पर आधारित, स्टार रेटिंग पर नहीं। केवल कीमत नहीं, प्रमाण भी देखें।",
++  "reputation.howItWorks": "यह कैसे काम करता है",
++  "reputation.tab.transporters": "परिवहन एजेंसियाँ",
++  "reputation.tab.buyers": "खरीदार",
++  "reputation.none": "अभी कोई साझेदार नहीं।",
++  "reputation.hide": "विवरण छिपाएँ",
++  "reputation.whyThis": "प्रमाण देखें",
++  "reputation.established": "प्रमाण-आधारित प्रोफ़ाइल",
++  "reputation.insufficient": "अपर्याप्त इतिहास",
++  "reputation.insufficientDesc": "अब तक {{min}} से कम पूर्ण परिणाम ({{done}})। यह खराब रेटिंग नहीं है।",
++  "reputation.completedCount": "{{n}} पूर्ण",
++  "reputation.lastActivity": "अंतिम गतिविधि {{date}}",
++  "reputation.noActivity": "अभी कोई गतिविधि नहीं",
++  "reputation.lastEvent": "नवीनतम: {{date}}",
++  "reputation.recent": "पिछले {{days}} दिनों में {{n}}",
++  "reputation.notRecorded": "अभी दर्ज नहीं",
++  "reputation.sample": "{{den}} में से {{num}}",
++  "reputation.excluded": "{{n}} समीक्षाधीन (गिने नहीं गए)",
++  "reputation.simulatedExcluded": "{{n}} नकली (सिमुलेटेड) भुगतान नहीं गिने गए",
++  "reputation.ind.on_time_pickup": "समय पर पिकअप",
++  "reputation.ind.on_time_delivery": "समय पर डिलीवरी",
++  "reputation.ind.quote_accuracy": "कोट की सटीकता",
++  "reputation.ind.trip_fulfilment": "पूर्ण यात्राएँ बनाम एजेंसी द्वारा रद्द",
++  "reputation.ind.terms_adherence": "तय शर्तों का पालन",
++  "reputation.ind.pickup_reliability": "पिकअप की विश्वसनीयता",
++  "reputation.ind.payment_status": "भुगतान की स्थिति",
++  "reputation.h.completed": "पूर्ण",
++  "reputation.h.cancelledByAgency": "एजेंसी द्वारा रद्द",
++  "reputation.h.cancelledOther": "रद्द (अन्य / कारण दर्ज नहीं)",
++  "reputation.h.contested": "समीक्षाधीन",
++  "reputation.h.cancelled": "रद्द",
++  "reputation.h.inProgress": "प्रगति में",
++  "reputation.complaints": "शिकायतें",
++  "reputation.complaintsLine": "{{recorded}} दर्ज · {{pending}} समीक्षा लंबित · {{resolved}} सुलझी · {{dismissed}} खारिज",
++  "reputation.complaintsNote": "लंबित शिकायतें केवल आरोप हैं और साझेदार के विरुद्ध नहीं गिनी जातीं।",
++  "reputation.feedbackLine": "किसान प्रतिक्रिया: {{n}} समीक्षाएँ, औसत {{avg}}/5 (राय; रैंकिंग में प्रयुक्त नहीं)",
++  "reputation.rank": "स्थापित साझेदारों में रैंक #{{n}}",
++  "reputation.unranked": "अभी रैंक नहीं",
++  "reputation.method.recorded": "हर आँकड़ा दर्ज यात्राओं, लेन-देन और शिकायतों से आता है। कुछ भी अनुमानित या पहले से भरा नहीं है।",
++  "reputation.method.sample": "हर संकेतक दिखाता है कि वह कितने रिकॉर्ड पर आधारित है और नवीनतम तिथि क्या है।",
++  "reputation.method.insufficient": "कम इतिहास वाले साझेदारों को \"अपर्याप्त इतिहास\" कहा जाता है, कम अंक नहीं दिए जाते।",
++  "reputation.method.contested": "साझेदार जिस प्रमाण पर आपत्ति करता है, समीक्षा के दौरान वह उसकी दरों में नहीं गिना जाता।",
++  "reputation.method.simulated": "सिमुलेटेड (डेमो) भुगतान कभी नहीं गिने जाते।",
++  "reputation.method.noScore": "कोई एक अंक नहीं है। रैंकिंग सांख्यिकीय निचली सीमा से होती है, इसलिए कुछ रिकॉर्ड सूची में शीर्ष पर नहीं आ सकते। पिछली गतिविधि भविष्य के प्रदर्शन की गारंटी नहीं है।",
++  "reputation.record.title": "खरीदार का व्यवहार कैसा रहा?",
++  "reputation.record.hint": "जो वास्तव में हुआ वह दर्ज करें। खरीदार इसे देख सकता है और आपत्ति कर सकता है।",
++  "reputation.record.pickup": "पिकअप",
++  "reputation.record.terms": "तय शर्तें",
++  "reputation.record.choose": "चुनें…",
++  "reputation.record.save": "सहेजें",
++  "reputation.record.saved": "दर्ज हो गया",
++  "reputation.result.ON_TIME": "समय पर",
++  "reputation.result.LATE": "देर से",
++  "reputation.result.NO_SHOW": "नहीं आया",
++  "reputation.result.AS_AGREED": "तय अनुसार",
++  "reputation.result.DEVIATED": "समझौते से हटे",
++  "reputation.finalCharge.title": "अंतिम बिल की गई राशि (₹)",
++  "reputation.finalCharge.hint": "कोट की सटीकता मापने के लिए तय कीमत से तुलना होती है। एक बार दर्ज होती है; एजेंसी आपत्ति कर सकती है।",
++  "reputation.finalCharge.recorded": "अंतिम राशि दर्ज: ₹{{amount}}",
++  "reputation.my.title": "मेरी प्रतिष्ठा",
++  "reputation.my.subtitle": "किसान यही देखते हैं। आप किसी भी गलत लगने वाले प्रमाण पर आपत्ति कर सकते हैं।",
++  "reputation.my.evidence": "आपकी प्रोफ़ाइल के पीछे का प्रमाण",
++  "reputation.my.noEvidence": "अभी कुछ दर्ज नहीं।",
++  "reputation.my.trip": "यात्रा #{{id}}",
++  "reputation.my.record": "लेन-देन #{{id}} का परिणाम",
++  "reputation.my.contest": "आपत्ति करें",
++  "reputation.my.reasonPlaceholder": "बताएँ क्या गलत है (कम से कम 10 अक्षर)",
++  "reputation.my.submit": "आपत्ति भेजें",
++  "reputation.dispute.OPEN": "खुला",
++  "reputation.dispute.UNDER_REVIEW": "समीक्षाधीन",
++  "reputation.dispute.UPHELD": "स्वीकृत: प्रमाण बाहर",
++  "reputation.dispute.REJECTED": "अस्वीकृत: प्रमाण गिना जाएगा",
++  "reputation.dispute.reviewerNote": "समीक्षक की टिप्पणी",
++  "reputation.field.status": "स्थिति",
++  "reputation.field.scheduled_pickup": "निर्धारित पिकअप",
++  "reputation.field.agreed_price": "तय कीमत",
++  "reputation.field.final_charge": "अंतिम राशि",
++  "reputation.field.cancelled_by": "किसने रद्द किया",
++  "reputation.field.promised_delivery_by": "डिलीवरी का वादा",
++  "reputation.field.metric": "मापदंड",
++  "reputation.field.result": "परिणाम",
++  "reputation.field.note": "टिप्पणी",
++  "reputation.field.picked_up_at": "पिकअप हुआ",
++  "reputation.field.delivered_at": "डिलीवर हुआ",
++  "reputation.field.recorded_at": "दर्ज तिथि",
++  "reputation.role.buyer": "खरीदार",
++  "reputation.role.transporter": "परिवहन एजेंसी",
++  "reputation.admin.title": "प्रतिष्ठा विवाद",
++  "reputation.admin.all": "सभी स्थितियाँ",
++  "reputation.admin.desc": "साझेदार दर्ज प्रमाण पर आपत्ति कर रहे हैं। निर्णय के लिए लिखित कारण आवश्यक है।",
++  "reputation.admin.empty": "कोई विवाद नहीं।",
++  "reputation.admin.notePlaceholder": "लिखित कारण (निर्णय के लिए आवश्यक)",
++  "reputation.admin.underReview": "समीक्षाधीन करें",
++  "reputation.admin.uphold": "स्वीकार करें (प्रमाण बाहर)",
++  "reputation.admin.reject": "अस्वीकार करें (प्रमाण गिना जाए)"
+ }
+diff --git a/frontend/src/i18n/translations/mr.json b/frontend/src/i18n/translations/mr.json
+index 6562088..ff92b1a 100644
+--- a/frontend/src/i18n/translations/mr.json
++++ b/frontend/src/i18n/translations/mr.json
+@@ -1453,5 +1453,103 @@
+   "location.timeout": "स्थान शोध कालबाह्य झाला.",
+   "location.unavailable": "तुमचे स्थान सापडले नाही.",
+   "location.unsupported": "या ब्राउझरवर स्थान शोध समर्थित नाही.",
+-  "advisor.explanationSourceNote": "वरील सर्व घटक recommendation engine चे वास्तविक इनपुट आहेत — नंतर जोडलेली कारणे नाहीत।"
++  "advisor.explanationSourceNote": "वरील सर्व घटक recommendation engine चे वास्तविक इनपुट आहेत — नंतर जोडलेली कारणे नाहीत।",
++  "navPartners": "भागीदार प्रतिष्ठा",
++  "navMyReputation": "माझी प्रतिष्ठा",
++  "reputation.title": "भागीदार प्रतिष्ठा",
++  "reputation.subtitle": "CropWise वरील नोंदवलेल्या व्यवहारांवर आधारित, स्टार रेटिंगवर नाही. फक्त किंमत नव्हे, पुरावाही पाहा.",
++  "reputation.howItWorks": "हे कसे काम करते",
++  "reputation.tab.transporters": "वाहतूक संस्था",
++  "reputation.tab.buyers": "खरेदीदार",
++  "reputation.none": "अद्याप कोणतेही भागीदार नाहीत.",
++  "reputation.hide": "तपशील लपवा",
++  "reputation.whyThis": "पुरावा पहा",
++  "reputation.established": "पुराव्यावर आधारित प्रोफाइल",
++  "reputation.insufficient": "अपुरा इतिहास",
++  "reputation.insufficientDesc": "आतापर्यंत {{min}} पेक्षा कमी पूर्ण निकाल ({{done}}). ही वाईट रेटिंग नाही.",
++  "reputation.completedCount": "{{n}} पूर्ण",
++  "reputation.lastActivity": "शेवटची हालचाल {{date}}",
++  "reputation.noActivity": "अद्याप हालचाल नाही",
++  "reputation.lastEvent": "अलीकडील: {{date}}",
++  "reputation.recent": "मागील {{days}} दिवसांत {{n}}",
++  "reputation.notRecorded": "अद्याप नोंद नाही",
++  "reputation.sample": "{{den}} पैकी {{num}}",
++  "reputation.excluded": "{{n}} पुनरावलोकनाखाली (मोजले नाही)",
++  "reputation.simulatedExcluded": "{{n}} सिम्युलेटेड पेमेंट मोजले नाहीत",
++  "reputation.ind.on_time_pickup": "वेळेवर पिकअप",
++  "reputation.ind.on_time_delivery": "वेळेवर डिलिव्हरी",
++  "reputation.ind.quote_accuracy": "कोटेशनची अचूकता",
++  "reputation.ind.trip_fulfilment": "पूर्ण फेऱ्या विरुद्ध संस्थेने रद्द केलेल्या",
++  "reputation.ind.terms_adherence": "ठरलेल्या अटींचे पालन",
++  "reputation.ind.pickup_reliability": "पिकअप विश्वासार्हता",
++  "reputation.ind.payment_status": "पेमेंट स्थिती",
++  "reputation.h.completed": "पूर्ण",
++  "reputation.h.cancelledByAgency": "संस्थेने रद्द केले",
++  "reputation.h.cancelledOther": "रद्द (इतर / कारण नोंदवलेले नाही)",
++  "reputation.h.contested": "पुनरावलोकनाखाली",
++  "reputation.h.cancelled": "रद्द",
++  "reputation.h.inProgress": "सुरू",
++  "reputation.complaints": "तक्रारी",
++  "reputation.complaintsLine": "{{recorded}} नोंदवलेल्या · {{pending}} पुनरावलोकन प्रलंबित · {{resolved}} निकाली · {{dismissed}} फेटाळलेल्या",
++  "reputation.complaintsNote": "प्रलंबित तक्रारी केवळ आरोप आहेत आणि भागीदाराविरुद्ध मोजल्या जात नाहीत.",
++  "reputation.feedbackLine": "शेतकरी अभिप्राय: {{n}} समीक्षा, सरासरी {{avg}}/5 (मत; क्रमवारीत वापरलेले नाही)",
++  "reputation.rank": "प्रस्थापित भागीदारांमध्ये क्रमांक #{{n}}",
++  "reputation.unranked": "अद्याप क्रमांक नाही",
++  "reputation.method.recorded": "प्रत्येक आकडा नोंदवलेल्या फेऱ्या, व्यवहार व तक्रारींमधून येतो. काहीही अंदाजित किंवा आधी भरलेले नाही.",
++  "reputation.method.sample": "प्रत्येक निर्देशक किती नोंदींवर आधारित आहे आणि अलीकडील तारीख दाखवतो.",
++  "reputation.method.insufficient": "कमी इतिहास असलेल्या भागीदारांना \"अपुरा इतिहास\" म्हटले जाते, कमी गुण दिले जात नाहीत.",
++  "reputation.method.contested": "भागीदाराने आक्षेप घेतलेला पुरावा पुनरावलोकनादरम्यान त्याच्या दरांत मोजला जात नाही.",
++  "reputation.method.simulated": "सिम्युलेटेड (डेमो) पेमेंट कधीही मोजले जात नाहीत.",
++  "reputation.method.noScore": "एकच गुण नाही. क्रमवारी सांख्यिकीय खालची मर्यादा वापरते, त्यामुळे थोड्या नोंदी यादीत अव्वल येऊ शकत नाहीत. भूतकाळातील कामगिरी भविष्यातील कामगिरीची हमी नाही.",
++  "reputation.record.title": "खरेदीदाराचा व्यवहार कसा होता?",
++  "reputation.record.hint": "प्रत्यक्षात जे घडले ते नोंदवा. खरेदीदार हे पाहू शकतो आणि आक्षेप घेऊ शकतो.",
++  "reputation.record.pickup": "पिकअप",
++  "reputation.record.terms": "ठरलेल्या अटी",
++  "reputation.record.choose": "निवडा…",
++  "reputation.record.save": "जतन करा",
++  "reputation.record.saved": "नोंदवले",
++  "reputation.result.ON_TIME": "वेळेवर",
++  "reputation.result.LATE": "उशिरा",
++  "reputation.result.NO_SHOW": "आले नाहीत",
++  "reputation.result.AS_AGREED": "ठरल्याप्रमाणे",
++  "reputation.result.DEVIATED": "करारापासून विचलित",
++  "reputation.finalCharge.title": "अंतिम आकारलेली रक्कम (₹)",
++  "reputation.finalCharge.hint": "कोटेशनची अचूकता मोजण्यासाठी ठरलेल्या किमतीशी तुलना होते. एकदाच नोंदवली जाते; संस्था आक्षेप घेऊ शकते.",
++  "reputation.finalCharge.recorded": "अंतिम रक्कम नोंदवली: ₹{{amount}}",
++  "reputation.my.title": "माझी प्रतिष्ठा",
++  "reputation.my.subtitle": "शेतकरी हेच पाहतात. चुकीचे वाटणाऱ्या कोणत्याही पुराव्यावर तुम्ही आक्षेप घेऊ शकता.",
++  "reputation.my.evidence": "तुमच्या प्रोफाइलमागील पुरावा",
++  "reputation.my.noEvidence": "अद्याप काही नोंदवलेले नाही.",
++  "reputation.my.trip": "फेरी #{{id}}",
++  "reputation.my.record": "व्यवहार #{{id}} चा निकाल",
++  "reputation.my.contest": "आक्षेप घ्या",
++  "reputation.my.reasonPlaceholder": "काय चुकीचे आहे ते सांगा (किमान 10 अक्षरे)",
++  "reputation.my.submit": "आक्षेप सादर करा",
++  "reputation.dispute.OPEN": "उघडा",
++  "reputation.dispute.UNDER_REVIEW": "पुनरावलोकनाखाली",
++  "reputation.dispute.UPHELD": "मान्य: पुरावा वगळला",
++  "reputation.dispute.REJECTED": "नाकारले: पुरावा मोजला जाईल",
++  "reputation.dispute.reviewerNote": "परीक्षकाची टिप्पणी",
++  "reputation.field.status": "स्थिती",
++  "reputation.field.scheduled_pickup": "नियोजित पिकअप",
++  "reputation.field.agreed_price": "ठरलेली किंमत",
++  "reputation.field.final_charge": "अंतिम रक्कम",
++  "reputation.field.cancelled_by": "कोणी रद्द केले",
++  "reputation.field.promised_delivery_by": "डिलिव्हरीचे वचन",
++  "reputation.field.metric": "मापदंड",
++  "reputation.field.result": "निकाल",
++  "reputation.field.note": "टिप्पणी",
++  "reputation.field.picked_up_at": "पिकअप झाले",
++  "reputation.field.delivered_at": "डिलिव्हर झाले",
++  "reputation.field.recorded_at": "नोंदवल्याची तारीख",
++  "reputation.role.buyer": "खरेदीदार",
++  "reputation.role.transporter": "वाहतूक संस्था",
++  "reputation.admin.title": "प्रतिष्ठा वाद",
++  "reputation.admin.all": "सर्व स्थिती",
++  "reputation.admin.desc": "भागीदार नोंदवलेल्या पुराव्यावर आक्षेप घेत आहेत. निर्णयासाठी लेखी कारण आवश्यक आहे.",
++  "reputation.admin.empty": "कोणतेही वाद नाहीत.",
++  "reputation.admin.notePlaceholder": "लेखी कारण (निर्णयासाठी आवश्यक)",
++  "reputation.admin.underReview": "पुनरावलोकनाखाली ठेवा",
++  "reputation.admin.uphold": "मान्य करा (पुरावा वगळा)",
++  "reputation.admin.reject": "नाकारा (पुरावा मोजला जाईल)"
+ }
+diff --git a/frontend/src/pages/AdminDashboard.jsx b/frontend/src/pages/AdminDashboard.jsx
+index e0e29df..44e0042 100644
+--- a/frontend/src/pages/AdminDashboard.jsx
++++ b/frontend/src/pages/AdminDashboard.jsx
+@@ -5,6 +5,7 @@ import StatCard from '../components/StatCard'
+ import LoadingSpinner from '../components/LoadingSpinner'
+ import Badge from '../components/Badge'
+ import Avatar from '../components/Avatar'
++import ReputationDisputesAdmin from '../components/ReputationDisputesAdmin'
+ import { useI18n } from '../i18n/I18nContext'
+ 
+ function AdminLogin({ onSuccess }) {
+@@ -269,6 +270,7 @@ export default function AdminDashboard() {
+           </tbody>
+         </table>
+       </div>
++      <ReputationDisputesAdmin token={token} />
+     </div>
+   )
+ }
+diff --git a/frontend/src/pages/Lots.jsx b/frontend/src/pages/Lots.jsx
+index cabab67..6deb6e9 100644
+--- a/frontend/src/pages/Lots.jsx
++++ b/frontend/src/pages/Lots.jsx
+@@ -6,6 +6,7 @@ import Badge from '../components/Badge'
+ import NegotiationPanel from '../components/NegotiationPanel'
+ import LoadingSpinner from '../components/LoadingSpinner'
+ import VerificationBadge from '../components/VerificationBadge'
++import ReputationBadge from '../components/ReputationBadge'
+ 
+ const CROPS = [
+   'Tomato', 'Onion', 'Potato', 'Wheat', 'Paddy (Rice)', 'Maize',
+@@ -252,6 +253,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
+                   {m.location} · ₹{m.estimated_price_per_kg}/kg est.
+                   {m.matched_demand_id && ` · ${t('lots.activeDemand')}`}
+                 </div>
++                <ReputationBadge type="buyer" id={m.buyer_id} className="mt-1" />
+                 {m.score_breakdown && (
+                   <div className="grid grid-cols-4 gap-1 mt-1 text-ink/40 dark:text-paper/40">
+                     {Object.entries(m.score_breakdown).slice(0, 4).map(([k, v]) => (
+@@ -287,6 +289,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
+                   <Badge tone={o.status === 'accepted' ? 'success' : o.status === 'rejected' ? 'neutral' : 'info'}>{t(`lots.offerStatus.${o.status}`)}</Badge>
+                 </div>
+                 {o.message && <div className="text-ink/50 dark:text-paper/50 mt-0.5">{o.message}</div>}
++                {o.buyer_id && <ReputationBadge type="buyer" id={o.buyer_id} className="mt-1" />}
+                 <button onClick={() => setNegotiatingId(negotiatingId === o.id ? null : o.id)}
+                   className="mt-2 text-forest font-semibold underline">
+                   {negotiatingId === o.id ? t('negotiation.close') : t('negotiation.open')}
+diff --git a/frontend/src/pages/Marketplace.jsx b/frontend/src/pages/Marketplace.jsx
+index 9705d40..ddce901 100644
+--- a/frontend/src/pages/Marketplace.jsx
++++ b/frontend/src/pages/Marketplace.jsx
+@@ -3,6 +3,7 @@ import { api } from '../api/client'
+ import { useAuth } from '../context/AuthContext'
+ import Badge from '../components/Badge'
+ import NegotiationPanel from '../components/NegotiationPanel'
++import ReputationBadge from '../components/ReputationBadge'
+ import LoadingSpinner from '../components/LoadingSpinner'
+ import { useI18n } from '../i18n/I18nContext'
+ 
+@@ -317,6 +318,7 @@ function OffersPanel({ listing, onChanged }) {
+                     requires the backend to emit structured reason codes
+                     instead of prose. Tracked as a known follow-up. */}
+                 <div className="text-xs text-ink/50 dark:text-paper/50">{m.reasons.join(' · ')}</div>
++                <ReputationBadge type="buyer" id={m.buyer_id} className="mt-1" />
+               </div>
+             ))}
+           </div>
+diff --git a/frontend/src/pages/MyReputation.jsx b/frontend/src/pages/MyReputation.jsx
+new file mode 100644
+index 0000000..4e80384
+--- /dev/null
++++ b/frontend/src/pages/MyReputation.jsx
+@@ -0,0 +1,99 @@
++import React, { useCallback, useEffect, useState } from 'react'
++import { Scale } from 'lucide-react'
++import { api } from '../api/client'
++import { useAuth } from '../context/AuthContext'
++import LoadingSpinner from '../components/LoadingSpinner'
++import Badge from '../components/Badge'
++import ReputationProfile, { StatusChip, SummaryLine } from '../components/ReputationProfile'
++import { useI18n } from '../i18n/I18nContext'
++import { formatDate, formatTimestamp } from '../utils/datetime'
++
++const TONE = { OPEN: 'warning', UNDER_REVIEW: 'info', UPHELD: 'success', REJECTED: 'neutral' }
++const FIELDS = ['status', 'scheduled_pickup', 'agreed_price', 'final_charge', 'cancelled_by', 'promised_delivery_by', 'metric', 'result', 'note']
++
++function EvidenceRow({ item, dispute, onContested }) {
++  const { t } = useI18n()
++  const [open, setOpen] = useState(false)
++  const [reason, setReason] = useState('')
++  const [error, setError] = useState('')
++  const [busy, setBusy] = useState(false)
++  const title = item.target_type === 'TRANSPORT_REQUEST'
++    ? t('reputation.my.trip', { id: item.target_id })
++    : t('reputation.my.record', { id: item.transaction_id })
++
++  async function submit() {
++    setBusy(true); setError('')
++    try {
++      await api.raiseReputationDispute({ target_type: item.target_type, target_id: item.target_id, reason })
++      setOpen(false); onContested()
++    } catch (e) { setError(e.message) } finally { setBusy(false) }
++  }
++
++  return (
++    <div className="bg-white dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/10 p-3 text-sm">
++      <div className="flex items-center justify-between gap-2">
++        <span className="font-semibold">{title}</span>
++        {dispute
++          ? <Badge tone={TONE[dispute.status]}>{t(`reputation.dispute.${dispute.status}`)}</Badge>
++          : <button onClick={() => setOpen(o => !o)} className="text-xs text-forest font-semibold underline">{t('reputation.my.contest')}</button>}
++      </div>
++      <dl className="mt-1 grid grid-cols-2 gap-x-3 text-xs text-ink/70 dark:text-paper/70">
++        {FIELDS.filter(f => item[f] !== undefined && item[f] !== null && item[f] !== '').map(f => (
++          <React.Fragment key={f}><dt className="text-ink/50 dark:text-paper/50">{t(`reputation.field.${f}`)}</dt><dd>{String(item[f])}</dd></React.Fragment>
++        ))}
++        {item.picked_up_at && <><dt className="text-ink/50 dark:text-paper/50">{t('reputation.field.picked_up_at')}</dt><dd>{formatTimestamp(item.picked_up_at)}</dd></>}
++        {item.delivered_at && <><dt className="text-ink/50 dark:text-paper/50">{t('reputation.field.delivered_at')}</dt><dd>{formatTimestamp(item.delivered_at)}</dd></>}
++        {item.recorded_at && <><dt className="text-ink/50 dark:text-paper/50">{t('reputation.field.recorded_at')}</dt><dd>{formatDate(item.recorded_at)}</dd></>}
++      </dl>
++      {dispute?.admin_note && <p className="text-xs mt-1">{t('reputation.dispute.reviewerNote')}: {dispute.admin_note}</p>}
++      {open && (
++        <div className="mt-2 space-y-2">
++          <textarea rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder={t('reputation.my.reasonPlaceholder')}
++            className="w-full border border-black/10 dark:border-white/20 rounded-lg px-2 py-1 text-sm bg-transparent" />
++          {error && <p className="text-xs text-red-600">{error}</p>}
++          <button disabled={reason.trim().length < 10 || busy} onClick={submit}
++            className="bg-forest text-paper text-xs font-semibold rounded-lg px-3 py-1.5 disabled:opacity-50">{t('reputation.my.submit')}</button>
++        </div>
++      )}
++    </div>
++  )
++}
++
++/** A buyer's or transport agency's view of its own profile, the evidence behind it, and the right to contest it. */
++export default function MyReputation() {
++  const { t } = useI18n()
++  const { role, user } = useAuth()
++  const [profile, setProfile] = useState(null)
++  const [evidence, setEvidence] = useState(null)
++  const [disputes, setDisputes] = useState([])
++  const [error, setError] = useState('')
++
++  const load = useCallback(() => {
++    const getProfile = role === 'buyer' ? api.reputationBuyer : api.reputationTransporter
++    Promise.all([getProfile(user.id), api.myReputationEvidence(), api.myReputationDisputes()])
++      .then(([p, e, d]) => { setProfile(p); setEvidence(e.items); setDisputes(d) })
++      .catch(e => setError(e.message))
++  }, [role, user])
++  useEffect(() => { if (user) load() }, [user, load])
++
++  if (error) return <p className="text-red-600 text-sm">{error}</p>
++  if (!profile) return <LoadingSpinner />
++  const disputeFor = item => disputes.find(d => d.target_type === item.target_type && d.target_id === item.target_id)
++
++  return (
++    <div className="max-w-3xl mx-auto">
++      <div className="flex items-center gap-2 mb-1">
++        <Scale size={22} className="text-forest" />
++        <h1 className="font-display text-3xl font-bold">{t('reputation.my.title')}</h1>
++      </div>
++      <p className="text-ink/60 dark:text-paper/60 mb-4">{t('reputation.my.subtitle')}</p>
++      <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-4 mb-6">
++        <div className="flex flex-wrap items-center gap-2 mb-3"><StatusChip profile={profile} /><SummaryLine profile={profile} /></div>
++        <ReputationProfile profile={profile} />
++      </div>
++      <h2 className="font-display font-semibold text-lg mb-2">{t('reputation.my.evidence')}</h2>
++      {evidence.length === 0 && <p className="text-sm text-ink/50 dark:text-paper/50">{t('reputation.my.noEvidence')}</p>}
++      <div className="space-y-2">{evidence.map(it => <EvidenceRow key={`${it.target_type}-${it.target_id}`} item={it} dispute={disputeFor(it)} onContested={load} />)}</div>
++    </div>
++  )
++}
+diff --git a/frontend/src/pages/Partners.jsx b/frontend/src/pages/Partners.jsx
+new file mode 100644
+index 0000000..3cad858
+--- /dev/null
++++ b/frontend/src/pages/Partners.jsx
+@@ -0,0 +1,75 @@
++import React, { useEffect, useState } from 'react'
++import { ShieldCheck } from 'lucide-react'
++import { api } from '../api/client'
++import LoadingSpinner from '../components/LoadingSpinner'
++import ReputationProfile, { StatusChip, SummaryLine } from '../components/ReputationProfile'
++import VerificationBadge from '../components/VerificationBadge'
++import { useI18n } from '../i18n/I18nContext'
++
++const METHOD_KEYS = ['recorded', 'sample', 'insufficient', 'contested', 'simulated', 'noScore']
++
++function PartnerCard({ profile }) {
++  const { t } = useI18n()
++  const [open, setOpen] = useState(false)
++  return (
++    <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-4">
++      <div className="flex items-start justify-between gap-3">
++        <div>
++          <div className="font-semibold flex items-center gap-2">
++            {profile.ranking.position && <span className="font-mono-data text-xs text-ink/50 dark:text-paper/50">#{profile.ranking.position}</span>}
++            {profile.name}
++            {profile.partner_type === 'buyer' && <VerificationBadge buyerId={profile.partner_id} compact />}
++          </div>
++          <div className="mt-1 flex flex-wrap items-center gap-2"><StatusChip profile={profile} /><SummaryLine profile={profile} /></div>
++        </div>
++        <button onClick={() => setOpen(o => !o)} className="text-xs text-forest font-semibold underline shrink-0">
++          {open ? t('reputation.hide') : t('reputation.whyThis')}
++        </button>
++      </div>
++      {open && <div className="mt-3"><ReputationProfile profile={profile} /></div>}
++    </div>
++  )
++}
++
++export default function Partners() {
++  const { t } = useI18n()
++  const [tab, setTab] = useState('transporters')
++  const [data, setData] = useState({})
++  const [error, setError] = useState('')
++  const [showMethod, setShowMethod] = useState(false)
++
++  useEffect(() => {
++    if (data[tab]) return
++    const call = tab === 'buyers' ? api.reputationBuyers : api.reputationTransporters
++    call().then(rows => setData(d => ({ ...d, [tab]: rows }))).catch(e => setError(e.message))
++  }, [tab, data])
++
++  const rows = data[tab]
++  return (
++    <div className="max-w-3xl mx-auto">
++      <div className="flex items-center gap-2 mb-1">
++        <ShieldCheck size={22} className="text-forest" />
++        <h1 className="font-display text-3xl font-bold">{t('reputation.title')}</h1>
++      </div>
++      <p className="text-ink/60 dark:text-paper/60 mb-4">{t('reputation.subtitle')}</p>
++      <button onClick={() => setShowMethod(s => !s)} className="text-xs text-forest font-semibold underline mb-3">{t('reputation.howItWorks')}</button>
++      {showMethod && (
++        <ul className="list-disc pl-5 text-sm text-ink/70 dark:text-paper/70 mb-4 space-y-1">
++          {METHOD_KEYS.map(k => <li key={k}>{t(`reputation.method.${k}`)}</li>)}
++        </ul>
++      )}
++      <div className="flex gap-2 mb-4">
++        {['transporters', 'buyers'].map(k => (
++          <button key={k} onClick={() => { setTab(k); setError('') }}
++            className={`px-4 py-1.5 rounded-full text-sm font-semibold border ${tab === k ? 'bg-forest text-paper border-forest' : 'border-black/10 dark:border-white/20'}`}>
++            {t(`reputation.tab.${k}`)}
++          </button>
++        ))}
++      </div>
++      {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
++      {!rows && !error && <LoadingSpinner />}
++      {rows && rows.length === 0 && <p className="text-sm text-ink/50 dark:text-paper/50">{t('reputation.none')}</p>}
++      <div className="space-y-3">{(rows || []).map(p => <PartnerCard key={`${p.partner_type}-${p.partner_id}`} profile={p} />)}</div>
++    </div>
++  )
++}
+diff --git a/frontend/src/pages/TransactionDetail.jsx b/frontend/src/pages/TransactionDetail.jsx
+index ac9607f..8002b66 100644
+--- a/frontend/src/pages/TransactionDetail.jsx
++++ b/frontend/src/pages/TransactionDetail.jsx
+@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
+ import { useParams, Link } from 'react-router-dom'
+ import { api } from '../api/client'
+ import { useAuth } from '../context/AuthContext'
++import RecordBuyerOutcome from '../components/RecordBuyerOutcome'
+ import Badge from '../components/Badge'
+ import { AgreementCard } from '../components/NegotiationPanel'
+ import LoadingSpinner from '../components/LoadingSpinner'
+@@ -545,6 +546,14 @@ export default function TransactionDetail() {
+             </div>
+           )}
+ 
++          {/* Reputation evidence: what actually happened with the buyer */}
++          {role === 'farmer' && ['PICKED_UP', 'IN_TRANSIT', 'DELIVERED', 'PAYMENT_PENDING', 'PAYMENT_INITIATED', 'PAYMENT_RECEIVED', 'COMPLETED'].includes(txn.status) && (
++            <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
++              <h2 className="font-display font-semibold text-base mb-3">{t('reputation.record.title')}</h2>
++              <RecordBuyerOutcome transactionId={txn.id} />
++            </div>
++          )}
++
+           {/* Grievance */}
+           {canRaiseDispute && (
+             <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
+diff --git a/frontend/src/pages/Transport.jsx b/frontend/src/pages/Transport.jsx
+index 6ba25b4..ad8b955 100644
+--- a/frontend/src/pages/Transport.jsx
++++ b/frontend/src/pages/Transport.jsx
+@@ -7,6 +7,8 @@ import Badge from '../components/Badge'
+ import { useI18n } from '../i18n/I18nContext'
+ import TripReviewSection from '../components/TripReviewSection'
+ import TransportQuoteSection from '../components/TransportQuoteSection'
++import ReputationBadge from '../components/ReputationBadge'
++import RecordFinalCharge from '../components/RecordFinalCharge'
+ import { formatTimestamp } from '../utils/datetime'
+ 
+ const STATUS_COLORS = {
+@@ -234,6 +236,9 @@ export default function Transport() {
+ 
+               {/* Post-trip trust layer. Renders only for DELIVERED trips;
+                   the component itself returns null otherwise. */}
++              {r.transporter_id && <ReputationBadge type="transporter" id={r.transporter_id} className="mt-3" />}
++              <RecordFinalCharge trip={r} />
++
+               <TripReviewSection trip={r} />
+             </div>
+           ))}

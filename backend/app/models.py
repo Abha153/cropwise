@@ -514,6 +514,18 @@ class TransportRequest(Base):
     transporter_agreed_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
+    # --- Reputation / QoS evidence (all nullable; nothing is back-filled) ---
+    # Charge the farmer was actually billed, recorded after the trip. Compared
+    # with transporter_agreed_price (or legacy agreed_price) for quote accuracy.
+    final_charge = Column(Float, nullable=True)
+    final_charge_recorded_at = Column(DateTime, nullable=True)
+    # Who cancelled: "farmer" / "transporter". NULL = not recorded (legacy rows),
+    # which is never counted against either party.
+    cancelled_by = Column(String, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    # ISO date by which delivery was promised; NULL = no deadline recorded.
+    promised_delivery_by = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
@@ -813,3 +825,56 @@ class NegotiationAgreement(Base):
     terms_hash = Column(String, nullable=False)         # SHA-256 of the canonical terms JSON
     rounds_count = Column(Integer, nullable=False)
     agreed_at = Column(DateTime, default=now)
+
+
+class PerformanceRecord(Base):
+    """A recorded, attributable outcome about a partner on one transaction
+    (QoS / reputation evidence). Written by the farmer who was party to the
+    transaction; the partner may contest it via ReputationDispute. Never
+    created automatically and never given a default value.
+
+    metric / result:
+      BUYER_PICKUP -- ON_TIME / LATE / NO_SHOW
+      BUYER_TERMS  -- AS_AGREED / DEVIATED   (price, quantity, quality as
+                      recorded in the negotiation agreement)
+    """
+    __tablename__ = "performance_records"
+    __table_args__ = (
+        UniqueConstraint("transaction_id", "metric", name="uq_performance_record_per_txn_metric"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    subject_role = Column(String, nullable=False)       # "buyer"
+    subject_id = Column(Integer, nullable=False, index=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False, index=True)
+    metric = Column(String, nullable=False)
+    result = Column(String, nullable=False)
+    note = Column(Text, nullable=True)
+    recorded_by_role = Column(String, nullable=False)
+    recorded_by_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=now)
+
+
+class ReputationDispute(Base):
+    """Right-of-reply for a rated partner. A partner contests one specific
+    piece of evidence. While OPEN / UNDER_REVIEW the contested item is left
+    out of that partner's rates (and shown as 'under review'); an admin then
+    UPHOLDs (item stays excluded) or REJECTs (item counts again)."""
+    __tablename__ = "reputation_disputes"
+    __table_args__ = (
+        UniqueConstraint("target_type", "target_id", "subject_role", "subject_id",
+                         name="uq_reputation_dispute_per_target"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    subject_role = Column(String, nullable=False)       # "buyer" / "transporter"
+    subject_id = Column(Integer, nullable=False, index=True)
+    target_type = Column(String, nullable=False)        # PERFORMANCE_RECORD / TRANSPORT_REQUEST
+    target_id = Column(Integer, nullable=False)
+    reason = Column(Text, nullable=False)
+    evidence_urls = Column(JSON, default=list)
+    status = Column(String, default="OPEN", nullable=False)  # OPEN / UNDER_REVIEW / UPHELD / REJECTED
+    admin_note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+    resolved_at = Column(DateTime, nullable=True)

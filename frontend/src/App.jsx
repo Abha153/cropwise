@@ -31,6 +31,8 @@ import Transport from './pages/Transport'
 import TransporterDashboard from './pages/TransporterDashboard'
 import ArrivalIntelligence from './pages/ArrivalIntelligence'
 import BestOption from './pages/BestOption'
+import Partners from './pages/Partners'
+import MyReputation from './pages/MyReputation'
 
 function Protected({ children, role }) {
   return (
@@ -76,6 +78,9 @@ export default function App() {
       <Route path="/transporter/dashboard" element={<Protected role="transporter"><TransporterDashboard /></Protected>} />
       <Route path="/arrivals" element={<Protected><ArrivalIntelligence /></Protected>} />
       <Route path="/best-option" element={<Protected><BestOption /></Protected>} />
+
+      <Route path="/partners" element={<Protected role="farmer"><Partners /></Protected>} />
+      <Route path="/my-reputation" element={<Protected><MyReputation /></Protected>} />
 
       <Route path="*" element={<Landing />} />
     </Routes>
