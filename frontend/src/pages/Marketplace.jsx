@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Badge from '../components/Badge'
+import NegotiationPanel from '../components/NegotiationPanel'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 
@@ -200,6 +201,7 @@ function OffersPanel({ listing, onChanged }) {
   const [busyId, setBusyId] = useState(null)
   const [confirmAction, setConfirmAction] = useState(null) // { id, type: 'accept'|'reject' }
   const [successMsg, setSuccessMsg] = useState('')
+  const [negotiatingId, setNegotiatingId] = useState(null)
 
   useEffect(() => {
     api.offersForListing(listing.id).then(setOffers).catch(() => setOffers([]))
@@ -264,10 +266,15 @@ function OffersPanel({ listing, onChanged }) {
         ) : (
           <div className="space-y-2">
             {offers.map(o => (
-              <div key={o.id} className="flex items-center justify-between bg-white dark:bg-white/5 rounded-lg px-3 py-2 text-sm">
+              <div key={o.id} className="bg-white dark:bg-white/5 rounded-lg px-3 py-2 text-sm">
+              <div className="flex items-center justify-between">
                 <div>
                   <div className="font-medium">₹{o.offered_price_per_kg}/kg · {o.quantity_kg.toLocaleString()} kg</div>
                   {o.message && <div className="text-xs text-ink/50 dark:text-paper/50">"{o.message}"</div>}
+                  <button onClick={() => setNegotiatingId(negotiatingId === o.id ? null : o.id)}
+                    className="text-xs text-forest font-semibold underline mt-1">
+                    {negotiatingId === o.id ? t('negotiation.close') : t('negotiation.open')}
+                  </button>
                 </div>
                 {o.status === 'pending' ? (
                   <div className="flex gap-2">
@@ -279,6 +286,15 @@ function OffersPanel({ listing, onChanged }) {
                     </button>
                   </div>
                 ) : <Badge tone={o.status === 'accepted' ? 'success' : 'neutral'}>{t(`offer.status.${o.status}`)}</Badge>}
+              </div>
+              {negotiatingId === o.id && (
+                <div className="mt-3 border-t border-black/5 dark:border-white/10 pt-3">
+                  <NegotiationPanel offerId={o.id} onChanged={(view) => {
+                    api.offersForListing(listing.id).then(setOffers).catch(() => {})
+                    if (view && view.offer_status === 'accepted') onChanged()
+                  }} />
+                </div>
+              )}
               </div>
             ))}
           </div>

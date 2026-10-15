@@ -161,6 +161,27 @@ class OfferCreate(BaseModel):
     quantity_kg: float
     message: Optional[str] = ""
     language: str = "en"
+    # Optional negotiation terms recorded on round 1 (see negotiation_service).
+    quality_grade: Optional[str] = None
+    quality_notes: Optional[str] = None
+    pickup_mode: Optional[str] = None
+    pickup_date: Optional[str] = None
+    delivery_location: Optional[str] = None
+    delivery_deadline: Optional[str] = None
+
+
+class CounterOfferRequest(BaseModel):
+    """Only send the terms you want to change; the rest carry over from the
+    proposal you are responding to."""
+    price_per_kg: Optional[float] = None
+    quantity_kg: Optional[float] = None
+    quality_grade: Optional[str] = None
+    quality_notes: Optional[str] = None
+    pickup_mode: Optional[str] = None
+    pickup_date: Optional[str] = None
+    delivery_location: Optional[str] = None
+    delivery_deadline: Optional[str] = None
+    message: Optional[str] = None
 
 
 class OfferOut(BaseModel):

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Badge from '../components/Badge'
+import { AgreementCard } from '../components/NegotiationPanel'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 import { formatTimestamp as fmt } from '../utils/datetime'
@@ -390,6 +391,7 @@ export default function TransactionDetail() {
   const { t } = useI18n()
   const [txn, setTxn] = useState(null)
   const [timeline, setTimeline] = useState(null)
+  const [negotiation, setNegotiation] = useState(null)
   const [advancing, setAdvancing] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
@@ -402,6 +404,8 @@ export default function TransactionDetail() {
       ])
       setTxn(txnData)
       setTimeline(tl)
+      // Agreed terms are supplementary: a failure here must not hide the transaction.
+      api.negotiationForTransaction(Number(id)).then(setNegotiation).catch(() => setNegotiation(null))
     } catch (e) {
       setError(e.message)
     }
@@ -512,6 +516,21 @@ export default function TransactionDetail() {
         </div>
 
         <div className="space-y-6">
+          {/* Agreed terms (negotiation record) */}
+          {negotiation && negotiation.agreement && (
+            <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
+              <h2 className="font-display font-semibold text-base mb-4">{t('negotiation.history')}</h2>
+              <AgreementCard agreement={negotiation.agreement} />
+              <ol className="mt-3 space-y-1 text-xs text-ink/60 dark:text-paper/60">
+                {negotiation.rounds.map(r => (
+                  <li key={r.id}>
+                    {t('negotiation.roundLabel', { n: r.round_no })} · {t(`negotiation.by.${r.proposed_by}`)} · ₹{r.price_per_kg}/kg × {Number(r.quantity_kg).toLocaleString()} kg · {t(`negotiation.roundStatus.${r.status}`)}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           {/* Payment */}
           <div className="bg-white dark:bg-white/5 rounded-2xl shadow-card border border-black/5 dark:border-white/10 p-5">
             <h2 className="font-display font-semibold text-base mb-4">{t('transactionDetail.payment')}</h2>

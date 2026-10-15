@@ -5,6 +5,7 @@ import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import StatCard from '../components/StatCard'
 import Badge from '../components/Badge'
+import NegotiationPanel from '../components/NegotiationPanel'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useI18n } from '../i18n/I18nContext'
 
@@ -24,6 +25,7 @@ export default function BuyerDashboard() {
   const { user } = useAuth()
   const { t } = useI18n()
   const [myOffers, setMyOffers] = useState(null)
+  const [negotiatingId, setNegotiatingId] = useState(null)
   const [demands, setDemands] = useState(null)
   const [transactions, setTransactions] = useState(null)
   const [verification, setVerification] = useState(null)
@@ -163,10 +165,23 @@ export default function BuyerDashboard() {
           <p className="text-sm text-ink/50 dark:text-paper/50">{t('ui.noOffers')} {t('buyerDashboard.browseListingsHint')}</p>
         ) : (
           <div className="space-y-2">
-            {myOffers.slice(0, 5).map(o => (
-              <div key={o.id} className="flex items-center justify-between text-sm border-b border-black/5 dark:border-white/10 pb-2">
-                <span>{o.lot_id ? t('buyerDashboard.lotHash', { id: o.lot_id }) : t('buyerDashboard.listingHash', { id: o.listing_id })} · ₹{o.offered_price_per_kg}/kg · {o.quantity_kg.toLocaleString()} kg</span>
-                <Badge tone={o.status === 'accepted' ? 'success' : o.status === 'rejected' ? 'warning' : 'neutral'}>{t(`offer.status.${o.status}`)}</Badge>
+            {[...myOffers].sort((a, b) => (b.status === 'pending') - (a.status === 'pending')).slice(0, 5).map(o => (
+              <div key={o.id} className="text-sm border-b border-black/5 dark:border-white/10 pb-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span>{o.lot_id ? t('buyerDashboard.lotHash', { id: o.lot_id }) : t('buyerDashboard.listingHash', { id: o.listing_id })} · ₹{o.offered_price_per_kg}/kg · {o.quantity_kg.toLocaleString()} kg</span>
+                  <span className="flex items-center gap-2">
+                    <button onClick={() => setNegotiatingId(negotiatingId === o.id ? null : o.id)}
+                      className="text-xs text-forest font-semibold underline">
+                      {negotiatingId === o.id ? t('negotiation.close') : t('negotiation.open')}
+                    </button>
+                    <Badge tone={o.status === 'accepted' ? 'success' : o.status === 'rejected' ? 'warning' : 'neutral'}>{t(`offer.status.${o.status}`)}</Badge>
+                  </span>
+                </div>
+                {negotiatingId === o.id && (
+                  <div className="mt-3">
+                    <NegotiationPanel offerId={o.id} onChanged={() => api.myOffers().then(setMyOffers).catch(() => {})} />
+                  </div>
+                )}
               </div>
             ))}
           </div>

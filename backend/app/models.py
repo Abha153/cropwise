@@ -763,3 +763,53 @@ class TripReview(Base):
             name="uq_trip_review_per_farmer_type",
         ),
     )
+
+
+class NegotiationRound(Base):
+    """One proposal in an offer's negotiation history.
+
+    Round 1 is the buyer's original offer. Each counteroffer adds a new
+    round proposed by the other party. The terms on a round are complete
+    (not a diff), so any single row shows exactly what was on the table.
+    status: PROPOSED (awaiting the other party) / COUNTERED / ACCEPTED /
+    REJECTED / WITHDRAWN. At most one round per offer is PROPOSED.
+    """
+    __tablename__ = "negotiation_rounds"
+    __table_args__ = (UniqueConstraint("offer_id", "round_no", name="uq_negotiation_round_no"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    offer_id = Column(Integer, ForeignKey("buyer_offers.id"), nullable=False, index=True)
+    round_no = Column(Integer, nullable=False)
+    proposed_by = Column(String, nullable=False)        # "buyer" / "farmer"
+    proposed_by_id = Column(Integer, nullable=True)
+    price_per_kg = Column(Float, nullable=False)
+    quantity_kg = Column(Float, nullable=False)
+    quality_grade = Column(String, nullable=True)       # A / B / C
+    quality_notes = Column(Text, nullable=True)
+    pickup_mode = Column(String, nullable=True)         # BUYER_PICKUP / FARMER_DELIVERY / TO_BE_AGREED
+    pickup_date = Column(String, nullable=True)         # ISO date
+    delivery_location = Column(String, nullable=True)
+    delivery_deadline = Column(String, nullable=True)   # ISO date
+    message = Column(Text, nullable=True)
+    status = Column(String, default="PROPOSED", nullable=False)
+    created_at = Column(DateTime, default=now)
+    responded_at = Column(DateTime, nullable=True)
+    responded_by = Column(String, nullable=True)        # who accepted/rejected/countered/withdrew
+
+
+class NegotiationAgreement(Base):
+    """Immutable snapshot of the terms both parties accepted. Created in the
+    same database transaction as the Transaction it belongs to."""
+    __tablename__ = "negotiation_agreements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    offer_id = Column(Integer, ForeignKey("buyer_offers.id"), nullable=False, unique=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True, unique=True)
+    round_id = Column(Integer, ForeignKey("negotiation_rounds.id"), nullable=False)
+    farmer_id = Column(Integer, ForeignKey("farmers.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("buyers.id"), nullable=False)
+    accepted_by = Column(String, nullable=False)        # "farmer" / "buyer"
+    terms = Column(JSON, nullable=False)                # full terms snapshot
+    terms_hash = Column(String, nullable=False)         # SHA-256 of the canonical terms JSON
+    rounds_count = Column(Integer, nullable=False)
+    agreed_at = Column(DateTime, default=now)

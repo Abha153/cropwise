@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useI18n } from '../i18n/I18nContext'
 import Badge from '../components/Badge'
+import NegotiationPanel from '../components/NegotiationPanel'
 import LoadingSpinner from '../components/LoadingSpinner'
 import VerificationBadge from '../components/VerificationBadge'
 
@@ -95,6 +96,7 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
   const [confirm, setConfirm] = useState(false)
   const [offers, setOffers] = useState(null)
   const [showOffers, setShowOffers] = useState(false)
+  const [negotiatingId, setNegotiatingId] = useState(null)
   const [offerBusy, setOfferBusy] = useState(null)
   const [offerError, setOfferError] = useState('')
 
@@ -121,6 +123,11 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
       setOffers([])
       setShowOffers(true)
     }
+  }
+
+  async function refreshOffers(view) {
+    try { setOffers(await api.offersForLot(lot.id)) } catch { /* keep the current list */ }
+    if (view && view.offer_status === 'accepted') onOfferAccepted()
   }
 
   async function respondOffer(offerId, action) {
@@ -280,6 +287,13 @@ function LotCard({ lot, mine, onCancelled, onOfferAccepted }) {
                   <Badge tone={o.status === 'accepted' ? 'success' : o.status === 'rejected' ? 'neutral' : 'info'}>{t(`lots.offerStatus.${o.status}`)}</Badge>
                 </div>
                 {o.message && <div className="text-ink/50 dark:text-paper/50 mt-0.5">{o.message}</div>}
+                <button onClick={() => setNegotiatingId(negotiatingId === o.id ? null : o.id)}
+                  className="mt-2 text-forest font-semibold underline">
+                  {negotiatingId === o.id ? t('negotiation.close') : t('negotiation.open')}
+                </button>
+                {negotiatingId === o.id && (
+                  <div className="mt-2"><NegotiationPanel offerId={o.id} onChanged={refreshOffers} /></div>
+                )}
                 {o.status === 'pending' && (
                   <div className="flex gap-2 mt-2">
                     <button disabled={offerBusy === o.id} onClick={() => respondOffer(o.id, 'accept')}
