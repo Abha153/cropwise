@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.auth_utils import require_buyer, require_farmer
+from app.services import negotiation_service as neg
 
 router = APIRouter(prefix="/offers", tags=["offers"])
 
@@ -78,6 +79,15 @@ def create_offer(payload: schemas.OfferCreate, buyer: models.Buyer = Depends(req
         lot.status = "UNDER_OFFER"
 
     db.add(offer)
+    db.flush()
+    # Round 1 of the negotiation = this offer, plus any terms the buyer sent.
+    first = neg.ensure_rounds(db, offer)[0]
+    initial = {k: getattr(payload, k) for k in neg.TERM_FIELDS if k not in ("price_per_kg", "quantity_kg")}
+    if any(v is not None for v in initial.values()):
+        _, available, _, _ = neg.offer_target(db, offer)
+        terms = neg.merge_terms(neg.round_terms(first), initial, available)
+        for k, v in terms.items():
+            setattr(first, k, v)
     db.commit()
     db.refresh(offer)
     return offer
@@ -135,6 +145,16 @@ def accept_offer(offer_id: int, farmer: models.Farmer = Depends(require_farmer),
         raise HTTPException(status_code=404, detail="Offer not found")
     if offer.status != "pending":
         raise HTTPException(status_code=400, detail=f"This offer is already {offer.status} and cannot be changed")
+    return accept_offer_core(db, offer, farmer, accepted_by="farmer")
+
+
+def accept_offer_core(db: Session, offer: models.BuyerOffer, farmer: models.Farmer, accepted_by: str):
+    """Turn the offer's current open proposal into a Transaction + Agreement.
+    `farmer` is the owner of the lot/listing (also used for the ownership
+    checks); `accepted_by` is the party who actually accepted ('farmer'
+    or 'buyer' -- the buyer accepts a farmer's counteroffer)."""
+    # Only the party who did not make the open proposal may accept it.
+    neg.require_turn(neg.require_open_round(db, offer), accepted_by)
 
     if offer.listing_id:
         listing = db.query(models.CropListing).filter(models.CropListing.id == offer.listing_id).first()
@@ -192,8 +212,9 @@ def accept_offer(offer_id: int, farmer: models.Farmer = Depends(require_farmer),
     # reject other pending offers on the same lot/listing
     for o in others:
         o.status = "rejected"
-        if o.lot_id:
-            pass  # lot already reassigned to SOLD; nothing further to revert
+        losing = neg.open_round(db, o)
+        if losing:
+            neg.close_round(losing, "REJECTED", "system")
 
     transaction = models.Transaction(
         listing_id=offer.listing_id,
@@ -214,17 +235,21 @@ def accept_offer(offer_id: int, farmer: models.Farmer = Depends(require_farmer),
     db.add(models.TransactionEvent(
         transaction_id=transaction.id,
         event_type="OFFER_CREATED",
-        description=f"Offer of ₹{offer.offered_price_per_kg}/kg created by buyer",
+        description="Offer created by buyer",
         performed_by="buyer",
         performed_by_id=offer.buyer_id,
     ))
     db.add(models.TransactionEvent(
         transaction_id=transaction.id,
         event_type="OFFER_ACCEPTED",
-        description=f"Offer accepted by farmer. Transaction initiated.",
-        performed_by="farmer",
-        performed_by_id=farmer.id,
+        description=f"Offer accepted by {accepted_by}. Transaction initiated.",
+        performed_by=accepted_by,
+        performed_by_id=farmer.id if accepted_by == "farmer" else offer.buyer_id,
     ))
+    neg.record_agreement(db, offer, transaction, accepted_by)
+    neg.notify(db, neg.other_party(accepted_by), farmer.id, offer.buyer_id,
+               "Offer accepted", f"Terms agreed: ₹{offer.offered_price_per_kg}/kg × {offer.quantity_kg} kg. "
+               f"Transaction #{transaction.id} created.", "success")
     db.commit()
     return {"accepted": True, "transaction_id": transaction.id}
 
@@ -246,16 +271,36 @@ def reject_offer(offer_id: int, farmer: models.Farmer = Depends(require_farmer),
         lot = db.query(models.Lot).filter(models.Lot.id == offer.lot_id).first()
         if not lot or lot.farmer_id != farmer.id:
             raise HTTPException(status_code=403, detail="You can only reject offers on your own lots")
-        # If no other pending offers remain on this lot, free it back up.
+
+    reject_offer_core(db, offer, "farmer")
+    neg.notify(db, "buyer", farmer.id, offer.buyer_id, "Offer rejected",
+               f"The farmer rejected the proposal of ₹{offer.offered_price_per_kg}/kg for {offer.quantity_kg} kg.",
+               "warning")
+    db.commit()
+    return {"rejected": True}
+
+
+def reject_offer_core(db: Session, offer: models.BuyerOffer, role: str):
+    """Reject the open proposal (by the party it was proposed TO)."""
+    neg.require_turn(neg.require_open_round(db, offer), role)
+    close_offer(db, offer, "rejected", role)
+
+
+def close_offer(db: Session, offer: models.BuyerOffer, new_status: str, role: str):
+    """End a negotiation without a deal ('rejected' or 'withdrawn'): update the
+    offer, close its open round, and free the lot if nothing else is pending."""
+    neg.ensure_rounds(db, offer)
+    if offer.lot_id:
+        lot = db.query(models.Lot).filter(models.Lot.id == offer.lot_id).first()
         remaining = (
             db.query(models.BuyerOffer)
-            .filter(models.BuyerOffer.lot_id == lot.id, models.BuyerOffer.id != offer.id,
+            .filter(models.BuyerOffer.lot_id == offer.lot_id, models.BuyerOffer.id != offer.id,
                     models.BuyerOffer.status == "pending")
             .count()
         )
-        if remaining == 0 and lot.status == "UNDER_OFFER":
+        if lot and remaining == 0 and lot.status == "UNDER_OFFER":
             lot.status = "AVAILABLE"
-
-    offer.status = "rejected"
-    db.commit()
-    return {"rejected": True}
+    offer.status = new_status
+    open_round = neg.open_round(db, offer)
+    if open_round:
+        neg.close_round(open_round, "REJECTED" if new_status == "rejected" else "WITHDRAWN", role)

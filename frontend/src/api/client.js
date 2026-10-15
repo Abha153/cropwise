@@ -133,6 +133,13 @@ export const api = {
   myOffers: () => request('/offers/mine', { auth: true }),
   acceptOffer: (id) => request(`/offers/${id}/accept`, { method: 'PATCH', auth: true }),
   rejectOffer: (id) => request(`/offers/${id}/reject`, { method: 'PATCH', auth: true }),
+  // Negotiation (offer -> counteroffer -> accept/reject -> agreement)
+  getNegotiation: (offerId) => request(`/negotiations/offer/${offerId}`, { auth: true }),
+  counterOffer: (offerId, payload) => request(`/negotiations/offer/${offerId}/counter`, { method: 'POST', body: payload, auth: true }),
+  acceptNegotiation: (offerId) => request(`/negotiations/offer/${offerId}/accept`, { method: 'POST', auth: true }),
+  rejectNegotiation: (offerId) => request(`/negotiations/offer/${offerId}/reject`, { method: 'POST', auth: true }),
+  withdrawNegotiation: (offerId) => request(`/negotiations/offer/${offerId}/withdraw`, { method: 'POST', auth: true }),
+  negotiationForTransaction: (txnId) => request(`/negotiations/transaction/${txnId}`, { auth: true }),
 
   // Matching
   matchBuyers: (listingId) => request(`/matching/listing/${listingId}`, { auth: true }),

@@ -203,6 +203,8 @@ A trained model (Prophet/XGBoost/LSTM for forecasting, a CNN for quality grading
 
 Real, server-validated CRUD: listings/lots, buyer offers, accept/reject with duplicate-action prevention, quantity/price validation against the listing's minimums. Buyer verification is a real submit → admin review → approve/reject workflow with an audit log, not a badge you can self-assign.
 
+**Negotiation workflow** (`/negotiations`): Offer → Counteroffer → Accept / Reject → Agreement → Transaction record. Each round stores the full terms (price, quantity, quality grade/notes, pickup mode and date, delivery location and deadline) and who proposed it; only the party an open proposal was made *to* can counter, accept or reject it, and the proposer can withdraw it (max 12 rounds). Accepting writes an immutable agreement snapshot with a SHA-256 fingerprint of the agreed terms in the same database transaction as the `Transaction`, plus an `AGREEMENT_RECORDED` timeline event. Offers created before this feature get their round history created lazily; nothing needs migrating. It records what both parties agreed — it does not enforce delivery or payment.
+
 ## Transport / Net Realization
 
 Transport cost is modelled per trip: vehicle-class selection (mini pickup / LCV / medium truck), diesel price, driver cost, maintenance, vehicle overhead, tolls beyond a free radius, an empty return leg, and a minimum-trip floor — all labelled as tunable reference assumptions, not official tariffs. This is the *same* calculator used everywhere a transport figure appears (market comparison, buyer matching, AgriAdvisor, profit calculator, FarmPool, admin impact dashboard) — there is no second copy of this logic anywhere in the codebase.
