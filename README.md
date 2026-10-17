@@ -2,7 +2,7 @@
 
 **Choose where to sell by what you will keep, not by the price on the board.**
 
-CropWise is a farmer-to-market decision and linkage platform built by **Team HACKING_BIRD** for Smart India Hackathon 2026, problem statement **PS-26132 – Strengthening Market Linkages and Price Discovery for Farmers** (Track: Software · Theme: Agriculture, FoodTech & Rural Development · Sponsoring Organisation: Government of Maharashtra, Maharashtra State Innovation Society). Author: Abha Tiwari, Government Engineering College Koni, Bilaspur, Chhattisgarh — per the title page of the research paper in this repo. (Team name confirmed from `research paper and diagrams/cropwise_logo/`; 
+CropWise is a farmer-to-market decision and linkage platform built by **Team HACKING_BIRD** for Smart India Hackathon 2026, problem statement **PS-26132 – Strengthening Market Linkages and Price Discovery for Farmers** (Track: Software · Theme: Agriculture, FoodTech & Rural Development · Sponsoring Organisation: Government of Maharashtra, Maharashtra State Innovation Society). Author: Abha Tiwari, Government Engineering College Koni, Bilaspur, Chhattisgarh — per the title page of the research paper in this repo. 
 
 |                      |                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------- |
@@ -22,6 +22,7 @@ CropWise is a farmer-to-market decision and linkage platform built by **Team HAC
 CropWise is a full-stack web platform that helps a smallholder or mid-sized farmer answer one question: *given my crop, quantity, and location, where should I actually sell, and what will I actually net after costs?* Existing tools (eNAM, AGMARKNET, most private agritech apps) either publish a price or move produce at scale — none combine transparent net-realization math, explainable selling recommendations, and a verified farmer-to-buyer marketplace in one connected system aimed at a single farmer's decision.
 
 CropWise's decision-support logic — the recommendation engine, price forecaster, buyer matcher, and quality grader — is **deliberately rule-based and statistical, not machine learning**. This is a stated design choice (explainability over black-box accuracy for a first-time, possibly low-literacy user), not a placeholder for AI that didn't get built. Every number and recommendation on screen traces back to a visible, human-readable reason.
+ml based price prediction is under development.
 
 ## Problem
 
