@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     # DEFAULT_DEMO_STATE env var, never by editing business logic.
     default_demo_state: str = "Maharashtra"
 
+    # Weather + geocoding (all optional -- the free Open-Meteo endpoints need
+    # no key). Open-Meteo's free tier is licensed for NON-COMMERCIAL use; for
+    # a commercial deployment set OPEN_METEO_API_KEY and point
+    # OPEN_METEO_BASE_URL at their customer endpoint (see .env.example).
+    # These are read server-side only and never sent to the browser.
+    open_meteo_api_key: str = ""
+    open_meteo_base_url: str = ""
+    open_meteo_geocoding_url: str = "https://geocoding-api.open-meteo.com/v1/search"
+    # Reverse geocoding (coordinates -> place name) uses OpenStreetMap
+    # Nominatim by default. Its usage policy REQUIRES an identifying
+    # User-Agent (ideally with a contact) and max 1 request/second; set
+    # GEOCODER_USER_AGENT to your own app/contact string in production.
+    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
+    geocoder_user_agent: str = "CropWise/1.0 (weather location lookup; set GEOCODER_USER_AGENT)"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

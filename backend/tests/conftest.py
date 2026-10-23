@@ -18,3 +18,13 @@ the handful of tests that go through the app's real engine/get_db.
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_backoff_sleep(monkeypatch):
+    """Provider retries use short real sleeps; tests must not wait on them."""
+    from app.services import open_meteo_provider
+    monkeypatch.setattr(open_meteo_provider, "RETRY_BACKOFF_SECONDS", (0.0, 0.0))

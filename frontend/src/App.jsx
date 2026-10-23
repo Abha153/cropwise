@@ -33,6 +33,7 @@ import ArrivalIntelligence from './pages/ArrivalIntelligence'
 import BestOption from './pages/BestOption'
 import Partners from './pages/Partners'
 import MyReputation from './pages/MyReputation'
+import Weather from './pages/Weather'
 
 function Protected({ children, role }) {
   return (
@@ -54,6 +55,7 @@ export default function App() {
 
       <Route path="/market-intelligence" element={<Protected><MarketIntelligence /></Protected>} />
       <Route path="/advisor" element={<Protected role="farmer"><AIAdvisor /></Protected>} />
+      <Route path="/weather" element={<Protected><Weather /></Protected>} />
       <Route path="/forecast" element={<Protected><PriceForecast /></Protected>} />
       <Route path="/marketplace" element={<Protected><Marketplace /></Protected>} />
       <Route path="/farmpool" element={<Protected role="farmer"><FarmPool /></Protected>} />

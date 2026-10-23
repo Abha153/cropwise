@@ -22,6 +22,9 @@ FLOW
         -> if found: return DEMO
         -> if not found: return UNAVAILABLE
 
+NOTE: the provider request/normalization now lives in
+app/services/open_meteo_provider.py. The honesty note below still applies.
+
 HONESTY (read before trusting this blindly): this sandboxed development
 environment cannot reach api.open-meteo.com at all -- confirmed both via
 direct network attempts (blocked, not on this environment's allowlist)
@@ -45,143 +48,89 @@ Bilha, Raipur) -- no farmer's location was invented or changed to make
 weather "available".
 """
 import datetime as dt
+import threading
 import time
 from typing import Optional
 
-import httpx
+from app.config import logger
+from app.services import open_meteo_provider as provider
+# Re-exported: existing callers/tests import these names from this module.
+from app.services.open_meteo_provider import (  # noqa: F401
+    WeatherAPIError, WeatherRateLimitError, condition_for_code, validate_coordinates,
+)
 
-from app.config import settings, logger
-
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-FORECAST_DAYS = 7
-LIVE_CACHE_TTL_SECONDS = 20 * 60  # 15-30 min window per spec; picked 20.
-REQUEST_TIMEOUT_SECONDS = 6.0
-
-# ---------------------------------------------------------------------------
-# WMO weather code -> human condition. One centralized mapping (per spec
-# "do not duplicate this mapping across components") -- the frontend
-# receives the resolved `condition` string plus the raw `weather_code`, and
-# maps `weather_code` to an icon itself (see frontend/src/utils/weatherCodes.js)
-# rather than this backend module knowing anything about icon names.
-# ---------------------------------------------------------------------------
-_WMO_CONDITIONS = {
-    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-    45: "Fog", 48: "Depositing rime fog",
-    51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
-    56: "Light freezing drizzle", 57: "Dense freezing drizzle",
-    61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
-    66: "Light freezing rain", 67: "Heavy freezing rain",
-    71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow", 77: "Snow grains",
-    80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
-    85: "Slight snow showers", 86: "Heavy snow showers",
-    95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
-}
-
-
-def condition_for_code(code) -> str:
-    try:
-        return _WMO_CONDITIONS.get(int(code), "Unknown")
-    except (TypeError, ValueError):
-        return "Unknown"
-
-
-class WeatherAPIError(Exception):
-    """Raised for any live-fetch failure: network, timeout, HTTP status,
-    or a response that doesn't match the expected shape. Caught by
-    get_weather() to trigger the DEMO fallback -- never surfaced raw."""
-
+OPEN_METEO_URL = provider.OPEN_METEO_URL
+FORECAST_DAYS = provider.FORECAST_DAYS
+LIVE_CACHE_TTL_SECONDS = 20 * 60   # data younger than this is served as "fresh"
+# When the provider is down or rate limiting us, an expired entry up to this
+# old is still served -- but labelled STALE with its age, never as new data.
+STALE_MAX_AGE_SECONDS = 6 * 60 * 60
+REQUEST_TIMEOUT_SECONDS = provider.REQUEST_TIMEOUT_SECONDS
 
 # ---------------------------------------------------------------------------
-# LIVE fetch
+# LIVE fetch + cache
 # ---------------------------------------------------------------------------
 
-_live_cache: dict = {}  # (rounded_lat, rounded_lon) -> (expires_at, result)
+# (rounded_lat, rounded_lon) -> (fetched_at_epoch, normalized_result)
+# Entries are kept past their TTL on purpose, so they can be served as STALE
+# when the provider fails. Bounded by _CACHE_MAX_ENTRIES.
+_live_cache: dict = {}
+_CACHE_MAX_ENTRIES = 500
 
-# Failures are NOT written into _live_cache above (that only ever holds a
-# successful result). Without a short negative cache, an unreachable/slow
-# Open-Meteo means every dashboard load re-pays the full
-# REQUEST_TIMEOUT_SECONDS timeout instead of failing fast to the demo
-# fallback after the first attempt.
+# Failures are not written into _live_cache. Without a short negative cache,
+# an unreachable/slow provider makes every dashboard load re-pay the full
+# timeout instead of failing fast after the first attempt.
 _FAILURE_CACHE_TTL_SECONDS = 60.0
 _failure_cache: dict = {}
 
+# Request deduplication: concurrent requests for the same grid cell share one
+# provider call instead of each hitting Open-Meteo.
+_inflight_locks: dict = {}
+_inflight_guard = threading.Lock()
+
 
 def _cache_key(lat: float, lon: float):
-    # Round to ~1.1km precision so nearby requests share a cache entry
-    # without materially changing which forecast grid cell is used.
+    # ~1.1 km precision. Nearby requests share an entry, and it is also the
+    # precision actually sent to the provider (privacy: no need for more --
+    # the forecast grid is several km wide).
     return (round(lat, 2), round(lon, 2))
 
 
+def _lock_for(key):
+    with _inflight_guard:
+        return _inflight_locks.setdefault(key, threading.Lock())
+
+
+def _store(key, result):
+    if len(_live_cache) >= _CACHE_MAX_ENTRIES:
+        oldest = min(_live_cache, key=lambda k: _live_cache[k][0])
+        _live_cache.pop(oldest, None)
+    _live_cache[key] = (time.time(), result)
+
+
 def _fetch_live(latitude: float, longitude: float) -> dict:
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
-        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max",
-        "temperature_unit": "celsius",
-        "wind_speed_unit": "kmh",
-        "precipitation_unit": "mm",
-        "timezone": "auto",
-        "forecast_days": FORECAST_DAYS,
+    """Provider round trip returning the normalized model. Kept as a thin
+    seam (tests patch it) over the provider adapter."""
+    rlat, rlon = _cache_key(latitude, longitude)
+    return provider.fetch_forecast(rlat, rlon)
+
+
+def _cache_meta(fetched_at: float, state: str) -> dict:
+    return {
+        "state": state,  # "live" (just fetched) | "fresh" (cache hit) | "stale"
+        "fetched_at": dt.datetime.fromtimestamp(fetched_at, dt.timezone.utc).isoformat(timespec="seconds"),
+        "age_seconds": max(0, int(time.time() - fetched_at)),
     }
-    try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            resp = client.get(OPEN_METEO_URL, params=params)
-    except httpx.HTTPError as e:
-        raise WeatherAPIError(f"network error: {e}") from e
 
-    if resp.status_code != 200:
-        raise WeatherAPIError(f"HTTP {resp.status_code}")
 
-    try:
-        data = resp.json()
-    except ValueError as e:
-        raise WeatherAPIError(f"invalid JSON: {e}") from e
-
-    # Validate shape before trusting anything -- same "never blindly trust
-    # a 200" discipline as the data.gov.in integration.
-    current = data.get("current")
-    daily = data.get("daily")
-    if not isinstance(current, dict) or not isinstance(daily, dict):
-        raise WeatherAPIError("missing current/daily blocks")
-
-    required_daily_keys = (
-        "time", "weather_code", "temperature_2m_max", "temperature_2m_min",
-        "precipitation_probability_max", "precipitation_sum", "wind_speed_10m_max",
-    )
-    for key in required_daily_keys:
-        if key not in daily or not isinstance(daily[key], list):
-            raise WeatherAPIError(f"daily block missing/invalid field: {key}")
-    lengths = {len(daily[k]) for k in required_daily_keys}
-    if len(lengths) != 1 or lengths == {0}:
-        raise WeatherAPIError("daily arrays have inconsistent/zero length")
-
-    try:
-        forecast = []
-        for i in range(len(daily["time"])):
-            forecast.append({
-                "date": daily["time"][i],
-                "weather_code": int(daily["weather_code"][i]),
-                "condition": condition_for_code(daily["weather_code"][i]),
-                "temp_min": round(float(daily["temperature_2m_min"][i]), 1),
-                "temp_max": round(float(daily["temperature_2m_max"][i]), 1),
-                "rainfall_probability": round(float(daily["precipitation_probability_max"][i]), 0),
-                "rainfall_mm": round(float(daily["precipitation_sum"][i]), 1),
-                "wind_speed_kmh": round(float(daily["wind_speed_10m_max"][i]), 1),
-                "humidity": None,  # Open-Meteo's daily block has no humidity field
-            })
-        current_out = {
-            "temperature": round(float(current["temperature_2m"]), 1),
-            "humidity": round(float(current["relative_humidity_2m"]), 0) if current.get("relative_humidity_2m") is not None else None,
-            "precipitation_mm": round(float(current.get("precipitation", 0)), 1),
-            "weather_code": int(current["weather_code"]),
-            "condition": condition_for_code(current["weather_code"]),
-            "wind_speed_kmh": round(float(current["wind_speed_10m"]), 1),
-        }
-    except (KeyError, TypeError, ValueError) as e:
-        raise WeatherAPIError(f"malformed values: {e}") from e
-
-    return {"current": current_out, "forecast": forecast}
+def _live_payload(result: dict, loc_out: dict, status: str, cache: dict, notice: Optional[str] = None) -> dict:
+    out = {
+        "status": status, "source": "Open-Meteo", "location": loc_out,
+        "units": provider.UNITS, "attribution": provider.ATTRIBUTION,
+        "cache": cache, "fetched_at": cache["fetched_at"], "notice": notice,
+        **result,
+    }
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -347,33 +296,73 @@ def _get_seeded(location_name: Optional[str]) -> Optional[dict]:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _has_coordinates(latitude, longitude) -> bool:
+    # Farmer.latitude/longitude default to 0.0 -- (0, 0) is open ocean, not a
+    # real farm, so it is treated as "no coordinates".
+    return bool(latitude) and bool(longitude)
+
+
 def get_weather(latitude: Optional[float], longitude: Optional[float], location_name: Optional[str]) -> dict:
     """
-    Resolves weather for a location, preferring LIVE (Open-Meteo) and
-    falling back to a deterministic DEMO forecast, per module docstring.
-    Never raises -- always returns a well-formed status/source/location/
-    current/forecast dict, even on total failure (status=UNAVAILABLE).
+    Resolves weather for a location, preferring LIVE (Open-Meteo), then a
+    STALE cached copy (clearly labelled, with its age) if the provider is
+    failing, then the deterministic DEMO table, then UNAVAILABLE.
+    Never raises for provider problems -- always returns a well-formed dict.
+    Coordinates are expected to be validated by the caller (the router
+    returns HTTP 422 for out-of-range values); invalid ones are treated as
+    absent here rather than sent to the provider.
     """
     loc_out = {"name": location_name, "latitude": latitude, "longitude": longitude}
 
-    if latitude and longitude:
-        cache_k = _cache_key(latitude, longitude)
-        cached = _live_cache.get(cache_k)
-        if cached and cached[0] > time.time():
-            result = cached[1]
-            return {"status": "LIVE", "source": "Open-Meteo", "location": loc_out, **result}
-        failure_expires = _failure_cache.get(cache_k)
-        if failure_expires and failure_expires > time.time():
-            logger.debug("weather_service: skipping live fetch, recent failure cached for %s", cache_k)
-        else:
-            try:
-                result = _fetch_live(latitude, longitude)
-                _live_cache[cache_k] = (time.time() + LIVE_CACHE_TTL_SECONDS, result)
-                return {"status": "LIVE", "source": "Open-Meteo", "location": loc_out, **result}
-            except WeatherAPIError as e:
-                logger.info("weather_service: live fetch failed for (%s, %s): %s -- trying demo fallback",
-                            latitude, longitude, e)
-                _failure_cache[cache_k] = time.time() + _FAILURE_CACHE_TTL_SECONDS
+    if _has_coordinates(latitude, longitude):
+        try:
+            validate_coordinates(latitude, longitude)
+            coords_ok = True
+        except ValueError:
+            coords_ok = False
+    else:
+        coords_ok = False
+
+    if coords_ok:
+        key = _cache_key(latitude, longitude)
+        now = time.time()
+        cached = _live_cache.get(key)
+        if cached and now - cached[0] < LIVE_CACHE_TTL_SECONDS:
+            return _live_payload(cached[1], loc_out, "LIVE", _cache_meta(cached[0], "fresh"))
+
+        with _lock_for(key):
+            # Another thread may have filled the cache while we waited.
+            cached = _live_cache.get(key)
+            if cached and time.time() - cached[0] < LIVE_CACHE_TTL_SECONDS:
+                return _live_payload(cached[1], loc_out, "LIVE", _cache_meta(cached[0], "fresh"))
+
+            failure_expires = _failure_cache.get(key)
+            rate_limited = False
+            if failure_expires and failure_expires > time.time():
+                logger.debug("weather_service: skipping live fetch, recent failure cached for %s", key)
+            else:
+                try:
+                    result = _fetch_live(latitude, longitude)
+                    _store(key, result)
+                    _failure_cache.pop(key, None)
+                    return _live_payload(result, loc_out, "LIVE", _cache_meta(_live_cache[key][0], "live"))
+                except WeatherRateLimitError as e:
+                    rate_limited = True
+                    # Respect Retry-After when given (bounded), else the default.
+                    wait = min(max(e.retry_after or _FAILURE_CACHE_TTL_SECONDS, 1.0), 15 * 60)
+                    _failure_cache[key] = time.time() + wait
+                    logger.info("weather_service: provider rate limit for grid %s", key)
+                except WeatherAPIError as e:
+                    # Rounded grid key only -- never log precise coordinates.
+                    logger.info("weather_service: live fetch failed for grid %s: %s", key, e)
+                    _failure_cache[key] = time.time() + _FAILURE_CACHE_TTL_SECONDS
+
+            cached = _live_cache.get(key)
+            if cached and time.time() - cached[0] <= STALE_MAX_AGE_SECONDS:
+                notice = ("The weather provider is rate limiting requests, so this is the last saved forecast."
+                          if rate_limited else
+                          "Live weather could not be refreshed, so this is the last saved forecast.")
+                return _live_payload(cached[1], loc_out, "STALE", _cache_meta(cached[0], "stale"), notice)
 
     seeded = _get_seeded(location_name)
     if seeded:
@@ -388,9 +377,12 @@ def get_weather(latitude: Optional[float], longitude: Optional[float], location_
             "wind_speed_kmh": days[0]["wind_speed_kmh"],
         }
         return {"status": "DEMO", "source": "CropWise Demo Dataset", "location": loc_out,
-                "current": current, "forecast": days}
+                "current": current, "forecast": days, "hourly": [], "cache": None,
+                "fetched_at": None, "notice": None, "units": provider.UNITS, "attribution": None}
 
-    return {"status": "UNAVAILABLE", "source": None, "location": loc_out, "current": None, "forecast": []}
+    return {"status": "UNAVAILABLE", "source": None, "location": loc_out, "current": None,
+            "forecast": [], "hourly": [], "cache": None, "fetched_at": None,
+            "notice": None, "units": provider.UNITS, "attribution": None}
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +410,7 @@ def derive_weather_risk(weather_result: dict):
         risk = "Medium"
     else:
         risk = "Low"
-    source_word = "Live" if weather_result.get("status") == "LIVE" else "Demo"
+    source_word = "Live" if weather_result.get("status") in ("LIVE", "STALE") else "Demo"
     note = (
         f"{source_word} forecast: {tomorrow['condition']} tomorrow, "
         f"{int(prob)}% rain chance. "
