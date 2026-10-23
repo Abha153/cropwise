@@ -1,8 +1,10 @@
+
 # CropWise
 
 **Choose where to sell by what you will keep, not by the price on the board.**
 
 CropWise is a farmer-to-market decision and linkage platform built by **Team HACKING_BIRD** for Smart India Hackathon 2026, problem statement **PS-26132 – Strengthening Market Linkages and Price Discovery for Farmers** (Track: Software · Theme: Agriculture, FoodTech & Rural Development · Sponsoring Organisation: Government of Maharashtra, Maharashtra State Innovation Society). Author: Abha Tiwari, Government Engineering College Koni, Bilaspur, Chhattisgarh — per the title page of the research paper in this repo.
+
 
 |                      |                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------- |
