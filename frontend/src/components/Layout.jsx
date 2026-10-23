@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Home, Target, BarChart3, Package, TrendingUp, Store, ShoppingCart, Boxes,
   Briefcase, Calculator, Truck, Users, Warehouse, Handshake, Bot,
-  MessageCircle, Bell, User, ShieldCheck, Scale, LogOut, Sun, Moon,
+  MessageCircle, Bell, User, ShieldCheck, Scale, LogOut, Sun, Moon, CloudSun,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -74,6 +74,7 @@ function useNavGroups(role, t) {
         { to: '/farmer/dashboard', label: t('navDashboard'), Icon: Home },
         { to: '/market-intelligence', label: t('navMarket'), Icon: BarChart3 },
         { to: '/forecast', label: t('navForecast'), Icon: TrendingUp },
+        { to: '/weather', label: t('navWeather'), Icon: CloudSun },
         { to: '/arrivals', label: t('navArrival'), Icon: Package },
       ],
     },

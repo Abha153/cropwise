@@ -17,7 +17,7 @@ function getToken() {
 // show cached data, etc.) instead of an indefinite hang.
 const DEFAULT_TIMEOUT_MS = 15000
 
-async function request(path, { method = 'GET', body, auth = false, form = false, token = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function request(path, { method = 'GET', body, auth = false, form = false, token = null, timeoutMs = DEFAULT_TIMEOUT_MS, signal = null } = {}) {
   const headers = {}
   if (!form) headers['Content-Type'] = 'application/json'
   if (auth) {
@@ -25,7 +25,14 @@ async function request(path, { method = 'GET', body, auth = false, form = false,
     if (t) headers['Authorization'] = `Bearer ${t}`
   }
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+  // Optional caller-supplied signal (e.g. cancelling a superseded search).
+  // Aborting it rejects with the browser's AbortError, which callers ignore.
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
   let res
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
@@ -35,7 +42,7 @@ async function request(path, { method = 'GET', body, auth = false, form = false,
       signal: controller.signal,
     })
   } catch (e) {
-    if (e.name === 'AbortError') {
+    if (e.name === 'AbortError' && timedOut) {
       throw new Error(`Request timed out after ${timeoutMs / 1000}s`)
     }
     throw e
@@ -98,13 +105,18 @@ export const api = {
   getMarkets: () => request('/market/markets'),
   nearestMarket: (latitude, longitude) => request(`/market/nearest-market?latitude=${latitude}&longitude=${longitude}`),
   getFarmerWeather: () => request('/weather/farmer', { auth: true }),
-  getWeatherByLocation: (latitude, longitude, location) => {
+  getWeatherByLocation: (latitude, longitude, location, opts = {}) => {
     const params = new URLSearchParams()
     if (latitude != null) params.set('latitude', latitude)
     if (longitude != null) params.set('longitude', longitude)
     if (location) params.set('location', location)
-    return request(`/weather?${params.toString()}`)
+    if (opts.advisory) params.set('include_advisory', 'true')
+    if (opts.crop) params.set('crop', opts.crop)
+    if (opts.growthStage) params.set('growth_stage', opts.growthStage)
+    return request(`/weather?${params.toString()}`, { signal: opts.signal })
   },
+  searchLocations: (q, opts = {}) => { const params = new URLSearchParams({ q, count: String(opts.count || 8) }); if (opts.language) params.set('language', opts.language); return request(`/weather/geocode/search?${params.toString()}`, { signal: opts.signal, timeoutMs: 8000 }) },
+  reverseGeocode: (latitude, longitude, opts = {}) => { const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude) }); if (opts.language) params.set('language', opts.language); return request(`/weather/geocode/reverse?${params.toString()}`, { signal: opts.signal, timeoutMs: 8000 }) },
   getPrices: (crop, market, days = 30, includeDemo = false) => request(`/market/prices?crop=${encodeURIComponent(crop)}&market=${encodeURIComponent(market)}&days=${days}&include_demo=${includeDemo}`),
   compareMarkets: (crop, quantityKg, location) => request(`/market/compare?crop=${encodeURIComponent(crop)}&quantity_kg=${quantityKg}&location=${encodeURIComponent(location)}`),
   getLiveMarkets: (state = 'Chhattisgarh') => request(`/market/live-markets?state=${encodeURIComponent(state)}`),
